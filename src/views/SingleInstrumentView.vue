@@ -504,7 +504,7 @@ function handleLoadModeChange() {
 async function applyPsuVoltage() {
   try {
     await serialManager.setPsuVoltageOnly(psuSetV.value);
-    addLog(`[PSU] 设置电压指令成功: ${psuSetV.value.toFixed(3)} V`, '#ecc94b');
+    addLog(`[PSU] 设置电压指令成功 (:APPLy CH1,${psuSetV.value.toFixed(3)},${psuSetI.value.toFixed(3)}) -> ${psuSetV.value.toFixed(3)} V`, '#ecc94b');
   } catch (err: any) {
     addLog(`[PSU 错误] 设置电压失败: ${err?.message || err}`, '#f85149');
   }
@@ -513,7 +513,7 @@ async function applyPsuVoltage() {
 async function applyPsuCurrentLimit() {
   try {
     await serialManager.setPsuCurrentLimitOnly(psuSetI.value);
-    addLog(`[PSU] 设置限流指令成功: ${psuSetI.value.toFixed(3)} A`, '#48bb78');
+    addLog(`[PSU] 设置限流指令成功 (:APPLy CH1,${psuSetV.value.toFixed(3)},${psuSetI.value.toFixed(3)}) -> ${psuSetI.value.toFixed(3)} A`, '#48bb78');
   } catch (err: any) {
     addLog(`[PSU 错误] 设置限流失败: ${err?.message || err}`, '#f85149');
   }

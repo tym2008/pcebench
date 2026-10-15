@@ -2,64 +2,33 @@
  * Standard SCPI & Manufacturer Command Formatter for:
  * 1. RIGOL DP700 Series Power Supply (DP711 / DP712)
  *    - Manual: DP700 Programming Guide
- *    - Commands: :APPLy, :OUTPut, :VOLTage, :CURRent, :MEASure:ALL?
+ *    - Setting: STRICTLY use :APPLy only (:APPLy CH1,<voltage>,<current>)
+ *    - Measurement: STRICTLY use :MEASure:ALL? only (:MEASure:ALL? CH1)
+ *    - Query Settings: STRICTLY use :APPLy? only (:APPLy? CH1)
+ *    - Output: :OUTPut CH1,ON / :OUTPut CH1,OFF / :OUTPut? CH1
  * 2. UNI-T UTL8500+ Series Programmable Electronic Load
  *    - Manual: UTL8500+ Programming Manual
  *    - Commands: :MODE (CURR|VOLT|POW|RES), :INP (1|0), :CURR, :VOLT, :POW, :RES, :INP:SHOR (1|0)
- *
- * CRITICAL: The two devices have completely distinct command sets!
- * NEVER mix or cross-send commands between PSU and Load!
  */
 
 export class DP700Protocol {
   /**
-   * Set voltage and current limit simultaneously:
+   * Set voltage and current limit simultaneously using :APPLy:
    * Manual p. 2-2: :APPLy CH1,<voltage>,<current>
    * Example: :APPLy CH1,5.000,1.000\n
    */
-  public static setVoltageAndLimit(voltage: number, limitCurrent: number): string {
+  public static apply(voltage: number, limitCurrent: number): string {
     return `:APPLy CH1,${voltage.toFixed(3)},${limitCurrent.toFixed(3)}\n`;
   }
 
-  /**
-   * Set voltage alone:
-   * Manual p. 2-25: [:SOURce[<n>]]:VOLTage[:LEVel][:IMMediate][:AMPLitude] <voltage>
-   * Example: :VOLTage 12.000\n
-   */
-  public static setVoltage(voltage: number): string {
-    return `:VOLTage ${voltage.toFixed(3)}\n`;
+  // Alias for backward compatibility: strictly outputs :APPLy
+  public static setVoltageAndLimit(voltage: number, limitCurrent: number): string {
+    return DP700Protocol.apply(voltage, limitCurrent);
   }
 
   /**
-   * Set current limit alone:
-   * Manual p. 2-22: [:SOURce[<n>]]:CURRent[:LEVel][:IMMediate][:AMPLitude] <current>
-   * Example: :CURRent 2.000\n
-   */
-  public static setCurrentLimit(limitCurrent: number): string {
-    return `:CURRent ${limitCurrent.toFixed(3)}\n`;
-  }
-
-  /**
-   * Set output state:
-   * Manual p. 2-21: :OUTPut[:STATe] [<channel>,]<state>
-   * Example: :OUTPut CH1,ON\n or :OUTPut CH1,OFF\n
-   */
-  public static setOutput(on: boolean): string {
-    return `:OUTPut CH1,${on ? 'ON' : 'OFF'}\n`;
-  }
-
-  /**
-   * Query output state:
-   * Manual p. 2-21: :OUTPut[:STATe]? [<channel>]
-   * Returns: ON or OFF
-   */
-  public static getOutput(): string {
-    return `:OUTPut? CH1\n`;
-  }
-
-  /**
-   * Query set voltage and current limit together:
-   * Manual p. 2-2: :APPLy? [<channel>]
+   * Query set voltage and current limit together using :APPLy?:
+   * Manual p. 2-2: :APPLy? CH1
    * Returns: "<voltage>,<current>" (e.g. "5.00,1.00")
    */
   public static getApply(): string {
@@ -67,21 +36,20 @@ export class DP700Protocol {
   }
 
   /**
-   * Query set voltage alone:
-   * Manual p. 2-25: :VOLTage?
-   * NOTE: In DP700 manual, :VOLTage? does NOT accept channel argument. Do NOT append CH1!
+   * Set output state:
+   * Manual p. 2-21: :OUTPut CH1,ON or :OUTPut CH1,OFF
    */
-  public static getVoltage(): string {
-    return `:VOLTage?\n`;
+  public static setOutput(on: boolean): string {
+    return `:OUTPut CH1,${on ? 'ON' : 'OFF'}\n`;
   }
 
   /**
-   * Query set current limit alone:
-   * Manual p. 2-22: :CURRent?
-   * NOTE: In DP700 manual, :CURRent? does NOT accept channel argument. Do NOT append CH1!
+   * Query output state:
+   * Manual p. 2-21: :OUTPut? CH1
+   * Returns: ON or OFF
    */
-  public static getCurrentLimit(): string {
-    return `:CURRent?\n`;
+  public static getOutput(): string {
+    return `:OUTPut? CH1\n`;
   }
 
   /**

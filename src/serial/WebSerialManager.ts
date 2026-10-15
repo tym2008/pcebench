@@ -630,7 +630,7 @@ export class WebSerialManager {
       const outpResp = await this.psu.query(DP700Protocol.getOutput(), 300);
       const outputOn = outpResp.toUpperCase().includes('ON') || outpResp.trim() === '1';
 
-      // 2. Query setpoint values using :APPLy? CH1 (single command returns "<volt>,<curr>")
+      // 2. Setting values strictly via :APPLy? CH1 (single command returns "<volt>,<curr>")
       let setVoltage = this.lastPsuStatus.setVoltage;
       let setCurrentLimit = this.lastPsuStatus.setCurrentLimit;
       const applResp = await this.psu.query(DP700Protocol.getApply(), 300);
@@ -638,14 +638,6 @@ export class WebSerialManager {
         const parts = applResp.split(',').map(s => parseFloat(s.trim()));
         if (!isNaN(parts[0])) setVoltage = parts[0];
         if (parts.length >= 2 && !isNaN(parts[1])) setCurrentLimit = parts[1];
-      } else {
-        // Fallback: :VOLTage? and :CURRent? WITHOUT channel argument
-        const vStr = await this.psu.query(DP700Protocol.getVoltage(), 300);
-        const iStr = await this.psu.query(DP700Protocol.getCurrentLimit(), 300);
-        const v = parseFloat(vStr);
-        const i = parseFloat(iStr);
-        if (!isNaN(v)) setVoltage = v;
-        if (!isNaN(i)) setCurrentLimit = i;
       }
 
       const s: PsuStatus = { outputOn, setVoltage, setCurrentLimit };
@@ -713,19 +705,21 @@ export class WebSerialManager {
   }
 
   public async setPsuVoltageOnly(voltage: number) {
+    const limitCurrent = this.lastPsuStatus.setCurrentLimit > 0 ? this.lastPsuStatus.setCurrentLimit : 3.0;
     if (this.psu.isVirtual) {
       this.psu.virtualPsu.setVoltage(voltage);
     } else {
-      await this.psu.write(DP700Protocol.setVoltage(voltage));
+      await this.psu.write(DP700Protocol.apply(voltage, limitCurrent));
     }
     this.lastPsuStatus.setVoltage = voltage;
   }
 
   public async setPsuCurrentLimitOnly(limitCurrent: number) {
+    const voltage = this.lastPsuStatus.setVoltage > 0 ? this.lastPsuStatus.setVoltage : 5.0;
     if (this.psu.isVirtual) {
       this.psu.virtualPsu.setCurrentLimit(limitCurrent);
     } else {
-      await this.psu.write(DP700Protocol.setCurrentLimit(limitCurrent));
+      await this.psu.write(DP700Protocol.apply(voltage, limitCurrent));
     }
     this.lastPsuStatus.setCurrentLimit = limitCurrent;
   }
