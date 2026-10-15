@@ -236,8 +236,10 @@ export class DeviceDriver {
           }
           const formatted = sanitized + '\n';
           await this.writer!.write(formatted);
-          // Safety guard time between physical serial transmissions
-          await new Promise(r => setTimeout(r, 15));
+          // Safety guard time: if this is PSU setting instruction (:APPLy or :OUTPut), hold serial bus for >= 0.5s (500ms) for PSU to be ready
+          const isPsuSetting = this.type === 'PSU' && (sanitized.toUpperCase().includes(':APPL') || sanitized.toUpperCase().includes(':OUTP'));
+          const guardDelay = isPsuSetting ? 500 : 15;
+          await new Promise(r => setTimeout(r, guardDelay));
           resolve();
         } catch (err: any) {
           this.handleDeviceLost(`向串口发送指令失败 (设备可能已断开): ${err?.message || err}`);
@@ -509,19 +511,41 @@ export class WebSerialManager {
 
   /**
    * Set PSU output state, voltage setpoint and current limit
+   * Strictly avoids re-sending :APPLy if voltage and limit are already identical
    */
   public async setPsuOutput(on: boolean, voltage: number, limitCurrent: number) {
     if (this.psu.isVirtual) {
       this.psu.virtualPsu.setOutput(on);
-      this.psu.virtualPsu.setVoltage(voltage);
-      this.psu.virtualPsu.setCurrentLimit(limitCurrent);
+      if (on) {
+        this.psu.virtualPsu.setVoltage(voltage);
+        this.psu.virtualPsu.setCurrentLimit(limitCurrent);
+      }
     } else {
-      await this.psu.write(DP700Protocol.setVoltageAndLimit(voltage, limitCurrent));
-      await this.psu.write(DP700Protocol.setOutput(on));
+      if (on) {
+        const voltageChanged = Math.abs(this.lastPsuStatus.setVoltage - voltage) > 1e-4;
+        const limitChanged = Math.abs(this.lastPsuStatus.setCurrentLimit - limitCurrent) > 1e-4;
+
+        // Only send :APPLy if voltage or current limit actually changed, or if output is currently off
+        if (voltageChanged || limitChanged || !this.lastPsuStatus.outputOn) {
+          await this.psu.write(DP700Protocol.setVoltageAndLimit(voltage, limitCurrent));
+        }
+
+        // Only send :OUTPut if output was not already ON
+        if (!this.lastPsuStatus.outputOn) {
+          await this.psu.write(DP700Protocol.setOutput(true));
+        }
+      } else {
+        // Turning OFF: just send :OUTPut CH1,OFF, no need to touch :APPLy
+        if (this.lastPsuStatus.outputOn) {
+          await this.psu.write(DP700Protocol.setOutput(false));
+        }
+      }
     }
     this.lastPsuStatus.outputOn = on;
-    this.lastPsuStatus.setVoltage = voltage;
-    this.lastPsuStatus.setCurrentLimit = limitCurrent;
+    if (on) {
+      this.lastPsuStatus.setVoltage = voltage;
+      this.lastPsuStatus.setCurrentLimit = limitCurrent;
+    }
   }
 
   /**
@@ -776,7 +800,10 @@ export class WebSerialManager {
     if (this.psu.isVirtual) {
       this.psu.virtualPsu.setVoltage(voltage);
     } else {
-      await this.psu.write(DP700Protocol.apply(voltage, limitCurrent));
+      const voltageChanged = Math.abs(this.lastPsuStatus.setVoltage - voltage) > 1e-4;
+      if (voltageChanged) {
+        await this.psu.write(DP700Protocol.apply(voltage, limitCurrent));
+      }
     }
     this.lastPsuStatus.setVoltage = voltage;
   }
@@ -786,7 +813,10 @@ export class WebSerialManager {
     if (this.psu.isVirtual) {
       this.psu.virtualPsu.setCurrentLimit(limitCurrent);
     } else {
-      await this.psu.write(DP700Protocol.apply(voltage, limitCurrent));
+      const limitChanged = Math.abs(this.lastPsuStatus.setCurrentLimit - limitCurrent) > 1e-4;
+      if (limitChanged) {
+        await this.psu.write(DP700Protocol.apply(voltage, limitCurrent));
+      }
     }
     this.lastPsuStatus.setCurrentLimit = limitCurrent;
   }

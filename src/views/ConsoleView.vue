@@ -804,21 +804,27 @@ async function handleStartTest() {
       const isVoltageSwitched = (i === 0 || Math.abs(point.voltageTarget - lastVoltageTarget) > 1e-4);
       lastVoltageTarget = point.voltageTarget;
 
-      // 2. Send Hardware Commands
-      try {
-        await serialManager.setPsuOutput(true, point.voltageTarget, sweepConfig.inputCurrentLimit);
-      } catch (cmdErr: any) {
-        onDeviceLostDetected(
-          'PSU',
-          serialManager.psu.state.model,
-          `直流电源下发控制指令未响应/写入失败: ${cmdErr?.message || cmdErr}`
-        );
-        while (isPaused.value && !abortController.signal.aborted) {
-          await new Promise((r) => setTimeout(r, 200));
+      // 2. Power Supply Voltage Control
+      // 用户要求: "同时如果前后两档电压一致不要重新发送apply指令"
+      // "设置指令之后必须间隔0.5s以上，不发送任何指令，等待电源就绪（直接等待即可），measure指令的间隔仍旧根据实际的用户决定。"
+      if (isVoltageSwitched) {
+        statusText.value = `正在切换电压至 ${point.voltageTarget.toFixed(2)}V，下发设置并等待 0.5s 电源就绪...`;
+        try {
+          await serialManager.setPsuOutput(true, point.voltageTarget, sweepConfig.inputCurrentLimit);
+        } catch (cmdErr: any) {
+          onDeviceLostDetected(
+            'PSU',
+            serialManager.psu.state.model,
+            `直流电源下发控制指令未响应/写入失败: ${cmdErr?.message || cmdErr}`
+          );
+          while (isPaused.value && !abortController.signal.aborted) {
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          if (abortController.signal.aborted) break;
         }
-        if (abortController.signal.aborted) break;
       }
 
+      // 3. Electronic Load Setting Control
       try {
         await serialManager.setLoadInput(true, sweepConfig.loadMode, point.loadTarget);
       } catch (cmdErr: any) {
@@ -833,77 +839,9 @@ async function handleStartTest() {
         if (abortController.signal.aborted) break;
       }
 
-      // 3. Voltage Switch Settle & Transient Rejection (0.5s)
-      // 用户要求: "电压切换后0.5s内数据全部忽略，切换电压后等待0.5s后才开始继续采样和测试"
-      if (isVoltageSwitched) {
-        statusText.value = `正在切换电压至 ${point.voltageTarget.toFixed(2)}V，等待 0.5s 硬件稳压与数据过滤...`;
-        const settleMs = 500;
-        const settleStart = performance.now();
-        const sampleIntervalMs = Math.max(10, Math.round(1000 / (sweepConfig.sampleRateHz || 8)));
-
-        while (performance.now() - settleStart < settleMs) {
-          if (abortController.signal.aborted) break;
-          while (isPaused.value && !abortController.signal.aborted) {
-            await new Promise((r) => setTimeout(r, 200));
-          }
-
-          const loopT0 = performance.now();
-          let meas: SystemTelemetry;
-          try {
-            meas = await serialManager.measureAsync();
-          } catch (measErr: any) {
-            while (isPaused.value && !abortController.signal.aborted) {
-              await new Promise((r) => setTimeout(r, 200));
-            }
-            if (abortController.signal.aborted) break;
-            continue;
-          }
-
-          // Update dashboard metrics
-          metrics.vin = meas.vin;
-          metrics.iin = meas.iin;
-          metrics.pin = meas.pin;
-          metrics.vout = meas.vout;
-          metrics.iout = meas.iout;
-          metrics.pout = meas.pout;
-          metrics.efficiency = meas.efficiency;
-
-          // Waveform reflects real-time continuous sampling point
-          latestSample.value = {
-            t: loopT0,
-            vin: meas.vin,
-            vout: meas.vout,
-            iin: meas.iin,
-            iout: meas.iout,
-          };
-
-          // Record high-frequency raw sample trace: strictly marked as NOT valid for average (0.5s ignored!)
-          const rawPt: RawSample = {
-            timestamp: Date.now(),
-            relTime: Math.round(((loopT0 - testStartWall) / 1000) * 1000) / 1000,
-            stepIndex: point.stepIndex,
-            voltageTarget: point.voltageTarget,
-            loadTarget: point.loadTarget,
-            stepRelTime: Math.round(((loopT0 - settleStart) / 1000) * 1000) / 1000,
-            isValidForAvg: false, // 0.5s settle data is strictly IGNORED for step calculations!
-            vin: meas.vin,
-            iin: meas.iin,
-            pin: meas.pin,
-            vout: meas.vout,
-            iout: meas.iout,
-            pout: meas.pout,
-            efficiency: meas.efficiency,
-          };
-          allRawSamples.value.push(rawPt);
-
-          const loopElapsed = performance.now() - loopT0;
-          await new Promise((r) => setTimeout(r, Math.max(5, sampleIntervalMs - loopElapsed)));
-        }
-      }
-
       if (abortController.signal.aborted) break;
 
-      // 4. Step Sampling & Testing (Starts strictly AFTER the 0.5s wait has completed)
+      // 4. Step Sampling & Testing (Dwell duration and sampleRate determined by user)
       statusText.value = `正在测试步 #${point.stepIndex} (Vin: ${point.voltageTarget.toFixed(2)}V, 负载: ${point.loadTarget.toFixed(2)}${point.loadMode})...`;
 
       const dwellMs = sweepConfig.stepDwellTime * 1000;
