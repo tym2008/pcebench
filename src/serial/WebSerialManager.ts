@@ -333,6 +333,100 @@ export class WebSerialManager {
     };
   }
 
+  public async setPsuVoltageOnly(voltage: number) {
+    if (this.psu.isVirtual) {
+      this.psu.virtualPsu.setVoltage(voltage);
+    } else {
+      await this.psu.write(DP700Protocol.setVoltage(voltage));
+    }
+  }
+
+  public async setPsuCurrentLimitOnly(limitCurrent: number) {
+    if (this.psu.isVirtual) {
+      this.psu.virtualPsu.setCurrentLimit(limitCurrent);
+    } else {
+      await this.psu.write(DP700Protocol.setCurrentLimit(limitCurrent));
+    }
+  }
+
+  public async setPsuOutputState(on: boolean) {
+    if (this.psu.isVirtual) {
+      this.psu.virtualPsu.setOutput(on);
+    } else {
+      await this.psu.write(DP700Protocol.setOutput(on));
+    }
+  }
+
+  public async setLoadModeAndValue(mode: 'CC' | 'CW' | 'CV' | 'CR', targetVal: number) {
+    if (this.load.isVirtual) {
+      this.load.virtualLoad.setMode(mode);
+      if (mode === 'CC') this.load.virtualLoad.setCurrent(targetVal);
+      else if (mode === 'CW') this.load.virtualLoad.setPower(targetVal);
+      else if (mode === 'CV') this.load.virtualLoad.setVoltage(targetVal);
+      else if (mode === 'CR') this.load.virtualLoad.setResistance(targetVal);
+    } else {
+      await this.load.write(UTL8500Protocol.setMode(mode));
+      if (mode === 'CC') await this.load.write(UTL8500Protocol.setCurrent(targetVal));
+      else if (mode === 'CW') await this.load.write(UTL8500Protocol.setPower(targetVal));
+      else if (mode === 'CV') await this.load.write(UTL8500Protocol.setVoltage(targetVal));
+      else if (mode === 'CR') await this.load.write(UTL8500Protocol.setResistance(targetVal));
+    }
+  }
+
+  public async setLoadInputState(on: boolean) {
+    if (this.load.isVirtual) {
+      this.load.virtualLoad.setInput(on);
+    } else {
+      await this.load.write(UTL8500Protocol.setInput(on));
+    }
+  }
+
+  public async setLoadShortState(on: boolean) {
+    if (!this.load.isVirtual) {
+      await this.load.write(UTL8500Protocol.setShort(on));
+    }
+  }
+
+  public async clearLoadProtectionState() {
+    if (!this.load.isVirtual) {
+      await this.load.write(UTL8500Protocol.clearProtection());
+    }
+  }
+
+  public async sendPsuRawSCPI(cmd: string): Promise<string> {
+    const cleanCmd = cmd.trim();
+    if (!cleanCmd) return '';
+    if (this.psu.isVirtual) {
+      if (cleanCmd.toUpperCase().includes('*IDN?')) {
+        return 'RIGOL TECHNOLOGIES,DP711,DP7A234500001,00.01.02';
+      }
+      if (cleanCmd.toUpperCase().includes(':MEAS')) {
+        const m = this.psu.virtualPsu.measure();
+        return `${m.vin.toFixed(3)},${m.iin.toFixed(3)},${m.pin.toFixed(3)}`;
+      }
+      return 'OK (仿真执行)';
+    }
+    await this.psu.write(cleanCmd + '\n');
+    return '已发送至电源串口';
+  }
+
+  public async sendLoadRawSCPI(cmd: string): Promise<string> {
+    const cleanCmd = cmd.trim();
+    if (!cleanCmd) return '';
+    if (this.load.isVirtual) {
+      if (cleanCmd.toUpperCase().includes('*IDN?')) {
+        return 'UNI-T,UTL8511,UTL8500A10098,V1.04';
+      }
+      if (cleanCmd.toUpperCase().includes(':MEAS')) {
+        const m = this.load.virtualLoad.measure();
+        return `${m.vout.toFixed(3)},${m.iout.toFixed(3)},${m.pout.toFixed(3)}`;
+      }
+      return 'OK (仿真执行)';
+    }
+    await this.load.write(cleanCmd + '\n');
+    return '已发送至负载串口';
+  }
+
   public async emergencyStopAll() {
     try {
       await this.setPsuOutput(false, 0, 0);

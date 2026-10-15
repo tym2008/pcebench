@@ -28,13 +28,18 @@
         </div>
       </div>
 
-      <!-- Tools Menu (Requested: 历史数据查看 - 查看近5条) -->
+      <!-- Tools Menu (Requested: 历史数据查看 & 单仪器测试界面) -->
       <div class="menu-item" :class="{ active: openMenu === 'tools' }" @click="toggleMenu('tools')">
         工具 (Tools)
         <div v-if="openMenu === 'tools'" class="dropdown-menu" @click.stop>
           <div class="dropdown-item" @click="openHistory(); closeMenus();">
             <span style="color: #63b3ed; font-weight: bold;">历史数据查看 (最近5条)...</span>
             <span style="font-size: 10px; color: #63b3ed; font-family: monospace;">IndexedDB</span>
+          </div>
+          <div class="dropdown-divider"></div>
+          <div class="dropdown-item" @click="openSingleInstrument(); closeMenus();">
+            <span style="color: #48bb78; font-weight: bold;">🔧 单仪器测试 / 硬件单体调试工具...</span>
+            <span style="font-size: 10px; color: #48bb78; font-family: monospace;">Ctrl+D</span>
           </div>
           <div class="dropdown-divider"></div>
           <div class="dropdown-item" @click="isSerialModalOpen = true; closeMenus();">
@@ -53,7 +58,7 @@
         </div>
       </div>
 
-      <!-- Top Right Quick Info -->
+      <!-- Top Right Quick Info & Shortcuts -->
       <div style="margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: 11px; font-family: 'Consolas', monospace;">
         <span style="display: flex; align-items: center; gap: 5px;">
           <span style="width: 7px; height: 7px; border-radius: 50%;" :style="{ backgroundColor: serialManager.psu.state.connected ? '#48bb78' : '#e53e3e' }"></span>
@@ -63,6 +68,16 @@
           <span style="width: 7px; height: 7px; border-radius: 50%;" :style="{ backgroundColor: serialManager.load.state.connected ? '#48bb78' : '#e53e3e' }"></span>
           负载: {{ serialManager.load.state.portName }}
         </span>
+
+        <!-- Single Instrument Test Shortcut Button -->
+        <button
+          class="btn"
+          style="padding: 2px 8px; font-size: 11px; font-weight: bold; background-color: #234e52; color: #81e6d9; border: 1px solid #319795;"
+          @click="openSingleInstrument()"
+          title="打开电源/负载底层单仪器独立调试工作台 (Ctrl+D)"
+        >
+          🔧 单仪器测试
+        </button>
 
         <button
           v-if="currentRecord"
@@ -503,6 +518,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
+import { useRouter } from 'vue-router';
 import confetti from 'canvas-confetti';
 import WaveformChart, { WaveformPoint } from '../components/WaveformChart.vue';
 import HistoryModal from '../components/HistoryModal.vue';
@@ -512,6 +528,7 @@ import { SweepConfig, MatrixPoint, TestRecord, RawSample, DeviceType, DashboardM
 import { saveTestRecord, getAllTestRecords, deleteTestRecord } from '../storage/indexedDB';
 import { exportRecordToCSV } from '../utils/csvExport';
 
+const router = useRouter();
 const serialManager = WebSerialManager.getInstance();
 
 // Menus & Modals
@@ -704,6 +721,7 @@ async function handleStartTest() {
 
   try {
     let completed = 0;
+    let lastVoltageTarget = -999999;
 
     for (let i = 0; i < matrixPoints.value.length; i++) {
       if (abortController.signal.aborted) break;
@@ -717,9 +735,12 @@ async function handleStartTest() {
       metrics.activeTargetV = point.voltageTarget;
       metrics.activeTargetLoad = point.loadTarget;
       metrics.currentStep = i + 1;
-      statusText.value = `正在测试步 #${point.stepIndex} (Vin: ${point.voltageTarget.toFixed(2)}V, 负载: ${point.loadTarget.toFixed(2)}${point.loadMode})...`;
 
-      // 1. Hardware Commands
+      // 1. Detect if Voltage is switched (first step or target voltage stepped)
+      const isVoltageSwitched = (i === 0 || Math.abs(point.voltageTarget - lastVoltageTarget) > 1e-4);
+      lastVoltageTarget = point.voltageTarget;
+
+      // 2. Send Hardware Commands
       try {
         await serialManager.setPsuOutput(true, point.voltageTarget, sweepConfig.inputCurrentLimit);
         await serialManager.setLoadInput(true, sweepConfig.loadMode, point.loadTarget);
@@ -735,8 +756,70 @@ async function handleStartTest() {
         if (abortController.signal.aborted) break;
       }
 
-      // 2. High-speed continuous sampling loop with 0.1s transient rejection
-      // Rule: Ignore 0.1s after voltage switch AND 0.1s before switching next step
+      // 3. Voltage Switch Settle & Transient Rejection (0.5s)
+      // 用户要求: "电压切换后0.5s内数据全部忽略，切换电压后等待0.5s后才开始继续采样和测试"
+      if (isVoltageSwitched) {
+        statusText.value = `正在切换电压至 ${point.voltageTarget.toFixed(2)}V，等待 0.5s 硬件稳压与数据过滤...`;
+        const settleMs = 500;
+        const settleStart = performance.now();
+        const sampleIntervalMs = Math.max(10, Math.round(1000 / (sweepConfig.sampleRateHz || 8)));
+
+        while (performance.now() - settleStart < settleMs) {
+          if (abortController.signal.aborted) break;
+          while (isPaused.value && !abortController.signal.aborted) {
+            await new Promise((r) => setTimeout(r, 200));
+          }
+
+          const loopT0 = performance.now();
+          const meas = serialManager.measure();
+
+          // Update dashboard metrics
+          metrics.vin = meas.vin;
+          metrics.iin = meas.iin;
+          metrics.pin = meas.pin;
+          metrics.vout = meas.vout;
+          metrics.iout = meas.iout;
+          metrics.pout = meas.pout;
+          metrics.efficiency = meas.efficiency;
+
+          // Waveform reflects real-time continuous sampling point
+          latestSample.value = {
+            t: loopT0,
+            vin: meas.vin,
+            vout: meas.vout,
+            iin: meas.iin,
+            iout: meas.iout,
+          };
+
+          // Record high-frequency raw sample trace: strictly marked as NOT valid for average (0.5s ignored!)
+          const rawPt: RawSample = {
+            timestamp: Date.now(),
+            relTime: Math.round(((loopT0 - testStartWall) / 1000) * 1000) / 1000,
+            stepIndex: point.stepIndex,
+            voltageTarget: point.voltageTarget,
+            loadTarget: point.loadTarget,
+            stepRelTime: Math.round(((loopT0 - settleStart) / 1000) * 1000) / 1000,
+            isValidForAvg: false, // 0.5s settle data is strictly IGNORED for step calculations!
+            vin: meas.vin,
+            iin: meas.iin,
+            pin: meas.pin,
+            vout: meas.vout,
+            iout: meas.iout,
+            pout: meas.pout,
+            efficiency: meas.efficiency,
+          };
+          allRawSamples.value.push(rawPt);
+
+          const loopElapsed = performance.now() - loopT0;
+          await new Promise((r) => setTimeout(r, Math.max(5, sampleIntervalMs - loopElapsed)));
+        }
+      }
+
+      if (abortController.signal.aborted) break;
+
+      // 4. Step Sampling & Testing (Starts strictly AFTER the 0.5s wait has completed)
+      statusText.value = `正在测试步 #${point.stepIndex} (Vin: ${point.voltageTarget.toFixed(2)}V, 负载: ${point.loadTarget.toFixed(2)}${point.loadMode})...`;
+
       const dwellMs = sweepConfig.stepDwellTime * 1000;
       const stepDurationSec = sweepConfig.stepDwellTime;
       const filterMarginSec = 0.10; // Exactly 0.1s margin
@@ -1142,15 +1225,28 @@ function showAbout() {
   );
 }
 
+function openSingleInstrument() {
+  router.push('/single-instrument');
+}
+
+function handleGlobalKeyDown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'd' || e.key === 'D')) {
+    e.preventDefault();
+    openSingleInstrument();
+  }
+}
+
 onMounted(async () => {
   serialManager.setOnDeviceLost(onDeviceLostDetected);
   serialManager.autoConnectVirtual();
   generateMatrix();
   startContinuousSampling();
   await refreshHistoryList();
+  window.addEventListener('keydown', handleGlobalKeyDown);
 });
 
 onUnmounted(() => {
   stopContinuousSampling();
+  window.removeEventListener('keydown', handleGlobalKeyDown);
 });
 </script>

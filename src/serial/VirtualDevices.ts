@@ -91,18 +91,28 @@ export class VirtualPowerSupply {
       pin: Math.round(pin * 1000) / 1000,
     };
   }
+
+  public getTargetVoltage(): number {
+    return this.targetVoltage;
+  }
+
+  public getCurrentLimit(): number {
+    return this.currentLimit;
+  }
 }
 
 export class VirtualElectronicLoad {
   private connected = true;
   private inputOn = false;
-  private mode: 'CC' | 'CW' = 'CC';
+  private mode: 'CC' | 'CW' | 'CV' | 'CR' = 'CC';
   private targetCurrent = 1.0; // In CC mode (A)
   private currentCurrent = 0.0;
   private lastCurrent = 0.0;
   private targetPower = 10.0;  // In CW mode (W)
   private currentPower = 0.0;
   private lastPower = 0.0;
+  private targetVoltage = 5.0; // In CV mode (V)
+  private targetResistance = 5.0; // In CR mode (Ω)
   private loadChangeTime = 0;
   private linkedSupply: VirtualPowerSupply | null = null;
 
@@ -134,8 +144,13 @@ export class VirtualElectronicLoad {
     return this.inputOn;
   }
 
-  public setMode(m: 'CC' | 'CW') {
+  public getMode(): 'CC' | 'CW' | 'CV' | 'CR' {
+    return this.mode;
+  }
+
+  public setMode(m: 'CC' | 'CW' | 'CV' | 'CR') {
     this.mode = m;
+    this.loadChangeTime = performance.now();
   }
 
   public setCurrent(current: number) {
@@ -150,6 +165,21 @@ export class VirtualElectronicLoad {
     this.loadChangeTime = performance.now();
   }
 
+  public setVoltage(voltage: number) {
+    this.targetVoltage = Math.max(0.1, voltage);
+    this.loadChangeTime = performance.now();
+  }
+
+  public setResistance(resistance: number) {
+    this.targetResistance = Math.max(0.1, resistance);
+    this.loadChangeTime = performance.now();
+  }
+
+  public getTargetCurrent(): number { return this.targetCurrent; }
+  public getTargetPower(): number { return this.targetPower; }
+  public getTargetVoltage(): number { return this.targetVoltage; }
+  public getTargetResistance(): number { return this.targetResistance; }
+
   public measure(supplyVin?: number): { vout: number; iout: number; pout: number } {
     if (!this.connected || !this.inputOn) {
       return { vout: 0, iout: 0, pout: 0 };
@@ -163,7 +193,7 @@ export class VirtualElectronicLoad {
     const dt = performance.now() - this.loadChangeTime;
     const alpha = Math.min(1.0, Math.max(0, dt / 50));
 
-    // Regulated output voltage (e.g., target 5.0V step-down or 12.0V step-up with slight load regulation droop)
+    // Regulated output voltage (nominal 5.0V regulated by chip)
     const nominalVout = 5.0; 
     let iout = 0;
     let pout = 0;
@@ -179,12 +209,32 @@ export class VirtualElectronicLoad {
         iout: Math.max(0, Math.round(iout * 1000) / 1000),
         pout: Math.max(0, Math.round(pout * 1000) / 1000),
       };
-    } else {
+    } else if (this.mode === 'CW') {
       // CW mode
       this.currentPower = this.lastPower + (this.targetPower - this.lastPower) * (1 - Math.exp(-alpha * 4));
       pout = this.currentPower + (Math.random() - 0.5) * 0.01;
       const vout = nominalVout - (pout / nominalVout) * 0.015 + (Math.random() - 0.5) * 0.003;
       iout = pout / vout;
+      return {
+        vout: Math.max(0, Math.round(vout * 1000) / 1000),
+        iout: Math.max(0, Math.round(iout * 1000) / 1000),
+        pout: Math.max(0, Math.round(pout * 1000) / 1000),
+      };
+    } else if (this.mode === 'CV') {
+      // Constant Voltage mode
+      const vout = this.targetVoltage + (Math.random() - 0.5) * 0.003;
+      iout = Math.max(0.1, Math.min(15, (vin - vout) * 1.5)) + (Math.random() - 0.5) * 0.005;
+      pout = vout * iout;
+      return {
+        vout: Math.max(0, Math.round(vout * 1000) / 1000),
+        iout: Math.max(0, Math.round(iout * 1000) / 1000),
+        pout: Math.max(0, Math.round(pout * 1000) / 1000),
+      };
+    } else {
+      // Constant Resistance mode
+      const vout = nominalVout + (Math.random() - 0.5) * 0.003;
+      iout = Math.max(0.01, vout / this.targetResistance) + (Math.random() - 0.5) * 0.002;
+      pout = vout * iout;
       return {
         vout: Math.max(0, Math.round(vout * 1000) / 1000),
         iout: Math.max(0, Math.round(iout * 1000) / 1000),

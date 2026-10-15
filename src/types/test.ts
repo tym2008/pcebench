@@ -25,7 +25,7 @@ export interface RawSample {
   voltageTarget: number;    // Target Vin (V)
   loadTarget: number;       // Target load (A or W)
   stepRelTime: number;      // Relative time within step (seconds)
-  isValidForAvg: boolean;   // True if within [0.1s, step_duration - 0.1s]
+  isValidForAvg: boolean;   // True if valid for average (excludes 0.5s voltage switch transient & step tails)
   vin: number;              // Measured Vin (V)
   iin: number;              // Measured Iin (A)
   pin: number;              // Measured Pin (W)

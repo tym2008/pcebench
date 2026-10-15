@@ -65,9 +65,9 @@ export function exportRecordToCSV(record: TestRecord, filename?: string): void {
   if (record.rawSamples && record.rawSamples.length > 0) {
     lines.push(``);
     lines.push(`"=== 高频原始采样数据 (Raw Sample Traces) ==="`);
-    lines.push(`"采样说明","包含每一个连续采样点；其中'是否计入均值'标明是否排除了电压/负载跳变前后0.1s的暂态数据"`);
+    lines.push(`"采样说明","包含每一个连续采样点；其中'是否计入均值'标明是否排除了电压切换后0.5s内被忽略的数据及步间暂态数据"`);
     lines.push(`"总采样点数","${record.rawSamples.length}"`);
-    lines.push(`"相对时间(s)","步骤号(Step)","目标电压(V)","目标负载(${record.config.loadMode === 'CC' ? 'A' : 'W'})","步内时间(s)","是否计入均值(0.1s过滤)","实测Vin(V)","实测Iin(A)","实测Pin(W)","实测Vout(V)","实测Iout(A)","实测Pout(W)","瞬时效率(%)"`);
+    lines.push(`"相对时间(s)","步骤号(Step)","目标电压(V)","目标负载(${record.config.loadMode === 'CC' ? 'A' : 'W'})","步内时间(s)","是否计入均值(0.5s过滤)","实测Vin(V)","实测Iin(A)","实测Pin(W)","实测Vout(V)","实测Iout(A)","实测Pout(W)","瞬时效率(%)"`);
 
     record.rawSamples.forEach((r) => {
       lines.push(
@@ -77,7 +77,7 @@ export function exportRecordToCSV(record: TestRecord, filename?: string): void {
           r.voltageTarget.toFixed(2),
           r.loadTarget.toFixed(2),
           r.stepRelTime.toFixed(4),
-          r.isValidForAvg ? `"YES"` : `"NO(0.1s过滤)"`,
+          r.isValidForAvg ? `"YES"` : `"NO(0.5s切换/暂态过滤)"`,
           r.vin.toFixed(4),
           r.iin.toFixed(4),
           r.pin.toFixed(4),
