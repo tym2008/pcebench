@@ -535,10 +535,8 @@ export class WebSerialManager {
           await this.psu.write(DP700Protocol.setOutput(true));
         }
       } else {
-        // Turning OFF: just send :OUTPut CH1,OFF, no need to touch :APPLy
-        if (this.lastPsuStatus.outputOn) {
-          await this.psu.write(DP700Protocol.setOutput(false));
-        }
+        // Turning OFF: UNCONDITIONALLY send :OUTPut CH1,OFF to ensure power output is killed
+        await this.psu.write(DP700Protocol.setOutput(false));
       }
     }
     this.lastPsuStatus.outputOn = on;
@@ -895,11 +893,28 @@ export class WebSerialManager {
   }
 
   public async emergencyStopAll() {
+    // 1. Unconditionally turn OFF physical and virtual power supply output
     try {
-      await this.setPsuOutput(false, 0, 0);
-      await this.setLoadInput(false, 'CC', 0);
+      if (this.psu.isVirtual) {
+        this.psu.virtualPsu.setOutput(false);
+      } else if (this.psu.state.connected) {
+        await this.psu.write(DP700Protocol.setOutput(false));
+      }
     } catch (e) {
-      console.warn('Emergency stop error:', e);
+      console.warn('[PSU emergency stop output off error]:', e);
     }
+    this.lastPsuStatus.outputOn = false;
+
+    // 2. Unconditionally turn OFF physical and virtual electronic load input
+    try {
+      if (this.load.isVirtual) {
+        this.load.virtualLoad.setInput(false);
+      } else if (this.load.state.connected) {
+        await this.load.write(UTL8500Protocol.setInput(false));
+      }
+    } catch (e) {
+      console.warn('[LOAD emergency stop input off error]:', e);
+    }
+    this.lastLoadStatus.inputOn = false;
   }
 }

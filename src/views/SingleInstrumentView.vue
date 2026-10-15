@@ -717,12 +717,18 @@ async function pollTelemetry() {
   }
 }
 
+function handleBeforeUnload() {
+  serialManager.emergencyStopAll().catch(() => {});
+}
+
 onMounted(() => {
   addLog('单仪器测试工作台已启动就绪。可独立调试电源电压/限流/开关与电子负载四模拉载。', '#58a6ff');
   pollTimer = window.setInterval(pollTelemetry, 350);
+  window.addEventListener('beforeunload', handleBeforeUnload);
 });
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer);
+  window.removeEventListener('beforeunload', handleBeforeUnload);
 });
 </script>

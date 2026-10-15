@@ -989,6 +989,8 @@ async function handleStartTest() {
     isRunning.value = false;
     isPaused.value = false;
     serialManager.isTesting = false;
+    // CRITICAL: Guarantee power supply output is turned OFF in ANY situation when test ends!
+    await serialManager.emergencyStopAll();
     stopContinuousSampling();
   }
 }
@@ -1308,6 +1310,10 @@ function handleGlobalKeyDown(e: KeyboardEvent) {
   }
 }
 
+function handleBeforeUnload() {
+  serialManager.emergencyStopAll().catch(() => {});
+}
+
 onMounted(async () => {
   serialManager.setOnDeviceLost(onDeviceLostDetected);
   serialManager.autoConnectVirtual();
@@ -1315,10 +1321,17 @@ onMounted(async () => {
   startContinuousSampling();
   await refreshHistoryList();
   window.addEventListener('keydown', handleGlobalKeyDown);
+  window.addEventListener('beforeunload', handleBeforeUnload);
 });
 
 onUnmounted(() => {
+  if (abortController) abortController.abort();
+  isRunning.value = false;
+  isPaused.value = false;
+  serialManager.isTesting = false;
+  serialManager.emergencyStopAll().catch(() => {});
   stopContinuousSampling();
   window.removeEventListener('keydown', handleGlobalKeyDown);
+  window.removeEventListener('beforeunload', handleBeforeUnload);
 });
 </script>
