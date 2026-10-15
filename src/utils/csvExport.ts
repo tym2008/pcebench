@@ -61,6 +61,35 @@ export function exportRecordToCSV(record: TestRecord, filename?: string): void {
     );
   });
 
+  // 3. High-Frequency Raw Sampling Points (Requested by User)
+  if (record.rawSamples && record.rawSamples.length > 0) {
+    lines.push(``);
+    lines.push(`"=== 高频原始采样数据 (Raw Sample Traces) ==="`);
+    lines.push(`"采样说明","包含每一个连续采样点；其中'是否计入均值'标明是否排除了电压/负载跳变前后0.1s的暂态数据"`);
+    lines.push(`"总采样点数","${record.rawSamples.length}"`);
+    lines.push(`"相对时间(s)","步骤号(Step)","目标电压(V)","目标负载(${record.config.loadMode === 'CC' ? 'A' : 'W'})","步内时间(s)","是否计入均值(0.1s过滤)","实测Vin(V)","实测Iin(A)","实测Pin(W)","实测Vout(V)","实测Iout(A)","实测Pout(W)","瞬时效率(%)"`);
+
+    record.rawSamples.forEach((r) => {
+      lines.push(
+        [
+          r.relTime.toFixed(4),
+          r.stepIndex,
+          r.voltageTarget.toFixed(2),
+          r.loadTarget.toFixed(2),
+          r.stepRelTime.toFixed(4),
+          r.isValidForAvg ? `"YES"` : `"NO(0.1s过滤)"`,
+          r.vin.toFixed(4),
+          r.iin.toFixed(4),
+          r.pin.toFixed(4),
+          r.vout.toFixed(4),
+          r.iout.toFixed(4),
+          r.pout.toFixed(4),
+          r.efficiency.toFixed(2),
+        ].join(',')
+      );
+    });
+  }
+
   const csvContent = '\uFEFF' + lines.join('\r\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);

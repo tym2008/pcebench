@@ -14,8 +14,25 @@ export interface SweepConfig {
   loadMode: LoadScanMode;   // 'CC' or 'CW'
 
   // Measurement Timing
-  stepDwellTime: number;    // Dwell time per point (seconds), e.g. 1.2
+  stepDwellTime: number;    // Dwell time per point (seconds), e.g. 1.0
   sampleRateHz: number;     // Sampling rate (Hz), e.g. 30
+}
+
+export interface RawSample {
+  timestamp: number;        // Epoch timestamp (ms)
+  relTime: number;          // Relative time from test start (seconds)
+  stepIndex: number;        // Step index #
+  voltageTarget: number;    // Target Vin (V)
+  loadTarget: number;       // Target load (A or W)
+  stepRelTime: number;      // Relative time within step (seconds)
+  isValidForAvg: boolean;   // True if within [0.1s, step_duration - 0.1s]
+  vin: number;              // Measured Vin (V)
+  iin: number;              // Measured Iin (A)
+  pin: number;              // Measured Pin (W)
+  vout: number;             // Measured Vout (V)
+  iout: number;             // Measured Iout (A)
+  pout: number;             // Measured Pout (W)
+  efficiency: number;       // Instantaneous efficiency (%)
 }
 
 export interface MatrixPoint {
@@ -55,6 +72,7 @@ export interface TestRecord {
   voltageSteps: number[];   // Array of voltage steps [5, 6, 7...]
   loadSteps: number[];      // Array of load steps [0.5, 1.0, 1.5...]
   points: MatrixPoint[];    // Flattened array of all matrix cells
+  rawSamples?: RawSample[]; // High-frequency raw sampling points trace
   summary: TestSummary;
 }
 

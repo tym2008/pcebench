@@ -332,3 +332,95 @@ input:disabled, select:disabled, button:disabled {
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* Device Disconnected Global Warning Modal */
+.device-lost-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.device-lost-modal {
+  width: 540px;
+  max-width: 92vw;
+  background-color: #1a1e24;
+  border: 2px solid #e53e3e;
+  box-shadow: 0 10px 35px rgba(229, 62, 62, 0.45);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: pulse-border 2s infinite ease-in-out;
+}
+
+@keyframes pulse-border {
+  0% { box-shadow: 0 0 12px rgba(229, 62, 62, 0.4); }
+  50% { box-shadow: 0 0 28px rgba(229, 62, 62, 0.85); }
+  100% { box-shadow: 0 0 12px rgba(229, 62, 62, 0.4); }
+}
+
+.device-lost-header {
+  height: 44px;
+  background-color: #2a1416;
+  border-bottom: 1px solid #742a2a;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+}
+
+.device-lost-body {
+  padding: 16px;
+}
+
+.device-lost-alert-banner {
+  background-color: #4a1c1d;
+  border-left: 4px solid #e53e3e;
+  padding: 10px 12px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+
+.device-lost-info-grid {
+  background-color: #121519;
+  border: 1px solid #2d3748;
+  border-radius: 6px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.info-label {
+  color: #a0aec0;
+}
+
+.info-val {
+  color: #e2e8f0;
+}
+
+.device-lost-footer {
+  background-color: #14181d;
+  border-top: 1px solid #2d3748;
+  padding: 10px 14px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+

@@ -424,6 +424,76 @@
       @connect-physical-load="handleConnectPhysicalLoad"
       @disconnect-load="handleDisconnectLoad"
     />
+
+    <!-- 6. Global Serial Device Lost Warning Modal (Requested: 全局弹窗警告并暂停测试) -->
+    <div v-if="deviceLostModal.visible" class="device-lost-overlay" @click.self="deviceLostModal.visible = false">
+      <div class="device-lost-modal">
+        <div class="device-lost-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <svg class="icon-md" viewBox="0 0 24 24" fill="none" stroke="#fc8181" stroke-width="2.5">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            <span style="font-size: 14px; font-weight: bold; color: #fc8181;">
+              ⚠️ 串口硬件设备异常丢失警告！
+            </span>
+          </div>
+          <button class="btn" style="padding: 2px 7px;" @click="deviceLostModal.visible = false">✕</button>
+        </div>
+
+        <div class="device-lost-body">
+          <div class="device-lost-alert-banner">
+            <div style="font-weight: bold; color: #feb2b2; margin-bottom: 4px; font-size: 13px;">
+              ⚠️ 检测到串口通信链路中断 / 硬件连接丢失！
+            </div>
+            <div style="font-size: 11.5px; color: #fed7d7;">
+              为保护被测芯片及仪器电路安全，测试引擎已自动紧急暂停 (PAUSED)，电源输出已安全切断。
+            </div>
+          </div>
+
+          <div class="device-lost-info-grid">
+            <div class="info-row">
+              <span class="info-label">丢失仪器:</span>
+              <span class="info-val" style="color: #ecc94b; font-weight: bold;">
+                {{ deviceLostModal.deviceType === 'PSU' ? '直流电源 (PSU)' : '电子负载 (Electronic Load)' }} - {{ deviceLostModal.deviceName }}
+              </span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">异常原因:</span>
+              <span class="info-val" style="color: #fc8181; font-weight: 500;">{{ deviceLostModal.reason }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">测试进度:</span>
+              <span class="info-val">已完成 {{ completedStepsCount }} / {{ matrixPoints.length }} 点 (当前步已挂起)</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">发生时间:</span>
+              <span class="info-val" style="font-family: monospace;">{{ deviceLostModal.timestamp }}</span>
+            </div>
+          </div>
+
+          <p style="font-size: 11.5px; color: #a0aec0; margin: 12px 0 0 0; line-height: 1.5;">
+            请检查设备电源及 USB 串口线物理连接。重新连接后可点击【恢复测试】无缝继续；亦可一键切换为内置仿真模式继续验证。
+          </p>
+        </div>
+
+        <div class="device-lost-footer">
+          <button class="btn btn-primary" style="font-weight: bold;" @click="openSerialModalFromLoss">
+            ⚙ 重新连接串口硬件
+          </button>
+          <button class="btn btn-warning" style="font-weight: bold;" @click="switchToVirtualAndResume">
+            🧪 切换仿真模式并继续测试
+          </button>
+          <button class="btn btn-danger" @click="abortAndSaveCurrent">
+            💾 终止测试并保存已测结果
+          </button>
+          <button class="btn" @click="deviceLostModal.visible = false">
+            保持暂停
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -434,7 +504,7 @@ import WaveformChart, { WaveformPoint } from '../components/WaveformChart.vue';
 import HistoryModal from '../components/HistoryModal.vue';
 import SerialConfigModal from '../components/SerialConfigModal.vue';
 import { WebSerialManager } from '../serial/WebSerialManager';
-import { SweepConfig, MatrixPoint, TestRecord, DashboardMetrics as IDashboardMetrics } from '../types/test';
+import { SweepConfig, MatrixPoint, TestRecord, RawSample, DeviceType, DashboardMetrics as IDashboardMetrics } from '../types/test';
 import { saveTestRecord, getAllTestRecords, deleteTestRecord } from '../storage/indexedDB';
 import { exportRecordToCSV } from '../utils/csvExport';
 
@@ -447,8 +517,20 @@ const isSerialModalOpen = ref(false);
 const isSimulationMode = ref(true);
 const historyRecords = ref<TestRecord[]>([]);
 
+// Device Lost Alert Modal State (Requested: 串口丢失全局弹窗警告并暂停测试)
+const deviceLostModal = reactive({
+  visible: false,
+  deviceType: 'PSU' as DeviceType,
+  deviceName: '',
+  reason: '',
+  timestamp: '',
+});
+
 const waveformRef = ref<InstanceType<typeof WaveformChart> | null>(null);
 const latestSample = ref<WaveformPoint | undefined>(undefined);
+
+// High-frequency raw sampling trace (Requested: 记录所有连续采样点，导出到CSV尾部)
+const allRawSamples = ref<RawSample[]>([]);
 
 // Test state
 const isRunning = ref(false);
@@ -557,13 +639,55 @@ function generateMatrix() {
   metrics.progressPercent = 0;
 }
 
+// Device Loss Handlers (Requested: 串口丢失全局弹窗警告并同时暂停测试)
+function onDeviceLostDetected(deviceType: DeviceType, deviceName: string, reason: string) {
+  console.error(
+    `%c[SERIAL DEVICE LOST] %c${deviceType} (${deviceName}): ${reason}`,
+    'color: white; background: #e53e3e; font-size: 14px; font-weight: bold; padding: 2px 6px; border-radius: 3px;',
+    'color: #fc8181; font-size: 13px; font-weight: bold;'
+  );
+
+  deviceLostModal.visible = true;
+  deviceLostModal.deviceType = deviceType;
+  deviceLostModal.deviceName = deviceName;
+  deviceLostModal.reason = reason;
+  deviceLostModal.timestamp = new Date().toLocaleTimeString();
+
+  if (isRunning.value) {
+    isPaused.value = true;
+    statusText.value = `⚠️ 警告: 检测到串口设备【${deviceName}】异常断开/丢失！测试已自动紧急暂停。`;
+    serialManager.emergencyStopAll().catch(() => {});
+  }
+}
+
+function openSerialModalFromLoss() {
+  deviceLostModal.visible = false;
+  isSerialModalOpen.value = true;
+}
+
+async function switchToVirtualAndResume() {
+  deviceLostModal.visible = false;
+  isSimulationMode.value = true;
+  serialManager.autoConnectVirtual();
+  statusText.value = '已切换为仿真驱动模式，测试已恢复';
+  isPaused.value = false;
+}
+
+async function abortAndSaveCurrent() {
+  deviceLostModal.visible = false;
+  if (abortController) abortController.abort();
+  await finalizeTest();
+}
+
 async function handleStartTest() {
   if (!serialManager.isBothConnected()) {
     serialManager.autoConnectVirtual();
   }
 
   generateMatrix();
+  allRawSamples.value = [];
   if (waveformRef.value) waveformRef.value.clear();
+  latestSample.value = undefined;
 
   isRunning.value = true;
   isPaused.value = false;
@@ -571,6 +695,8 @@ async function handleStartTest() {
   statusText.value = '正在执行全自动 2D 矩阵效率测试...';
 
   startContinuousSampling();
+
+  const testStartWall = performance.now();
 
   try {
     let completed = 0;
@@ -590,28 +716,68 @@ async function handleStartTest() {
       statusText.value = `正在测试步 #${point.stepIndex} (Vin: ${point.voltageTarget.toFixed(2)}V, 负载: ${point.loadTarget.toFixed(2)}${point.loadMode})...`;
 
       // 1. Hardware Commands
-      await serialManager.setPsuOutput(true, point.voltageTarget, sweepConfig.inputCurrentLimit);
-      await serialManager.setLoadInput(true, sweepConfig.loadMode, point.loadTarget);
-
-      // 2. Dwell & sample with 15% transient rejection
-      const dwellMs = sweepConfig.stepDwellTime * 1000;
-      const marginMs = Math.min(150, dwellMs * 0.15);
-      const sampleIntervalMs = Math.round(1000 / sweepConfig.sampleRateHz);
-
-      const startTime = performance.now();
-      let sumVin = 0, sumIin = 0, sumPin = 0;
-      let sumVout = 0, sumIout = 0, sumPout = 0;
-      let count = 0;
-
-      while (performance.now() - startTime < dwellMs) {
+      try {
+        await serialManager.setPsuOutput(true, point.voltageTarget, sweepConfig.inputCurrentLimit);
+        await serialManager.setLoadInput(true, sweepConfig.loadMode, point.loadTarget);
+      } catch (cmdErr: any) {
+        onDeviceLostDetected(
+          'PSU',
+          serialManager.psu.state.model,
+          `发送控制指令失败: ${cmdErr?.message || cmdErr}`
+        );
+        while (isPaused.value && !abortController.signal.aborted) {
+          await new Promise((r) => setTimeout(r, 200));
+        }
         if (abortController.signal.aborted) break;
+      }
+
+      // 2. High-speed continuous sampling loop with 0.1s transient rejection
+      // Rule: Ignore 0.1s after voltage switch AND 0.1s before switching next step
+      const dwellMs = sweepConfig.stepDwellTime * 1000;
+      const stepDurationSec = sweepConfig.stepDwellTime;
+      const filterMarginSec = 0.10; // Exactly 0.1s margin
+      const sampleIntervalMs = Math.max(15, Math.round(1000 / (sweepConfig.sampleRateHz || 30)));
+
+      const stepStartWall = performance.now();
+      const validVinList: number[] = [];
+      const validIinList: number[] = [];
+      const validPinList: number[] = [];
+      const validVoutList: number[] = [];
+      const validIoutList: number[] = [];
+      const validPoutList: number[] = [];
+
+      let stepElapsedMs = 0;
+
+      while (stepElapsedMs < dwellMs) {
+        if (abortController.signal.aborted) break;
+
+        // Handle pause (e.g. paused due to serial disconnect or manual pause)
         while (isPaused.value && !abortController.signal.aborted) {
           await new Promise((r) => setTimeout(r, 200));
         }
 
-        const elapsed = performance.now() - startTime;
+        const loopT0 = performance.now();
+        stepElapsedMs = loopT0 - stepStartWall;
+        const stepElapsedSec = stepElapsedMs / 1000;
+        const totalElapsedSec = (loopT0 - testStartWall) / 1000;
+
+        // Check connection health
+        const health = serialManager.checkHealth();
+        if (!health.ok) {
+          while (isPaused.value && !abortController.signal.aborted) {
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          if (abortController.signal.aborted) break;
+        }
+
+        // Transient rejection condition: ignore [0 ~ 0.1s] and [dwellTime-0.1s ~ dwellTime]
+        const isValidForAvg = (stepDurationSec > 0.20)
+          ? (stepElapsedSec >= filterMarginSec && stepElapsedSec <= (stepDurationSec - filterMarginSec))
+          : true;
+
         const meas = serialManager.measure();
 
+        // Real-time telemetry dashboard values
         metrics.vin = meas.vin;
         metrics.iin = meas.iin;
         metrics.pin = meas.pin;
@@ -620,37 +786,61 @@ async function handleStartTest() {
         metrics.pout = meas.pout;
         metrics.efficiency = meas.efficiency;
 
-        // Push to real-time waveform buffer
+        // Waveform reflects EVERY single continuous sampling point in real-time
         latestSample.value = {
-          t: performance.now(),
+          t: loopT0,
           vin: meas.vin,
           vout: meas.vout,
           iin: meas.iin,
           iout: meas.iout,
         };
 
-        if (elapsed >= marginMs && elapsed <= dwellMs - marginMs) {
-          sumVin += meas.vin;
-          sumIin += meas.iin;
-          sumPin += meas.pin;
-          sumVout += meas.vout;
-          sumIout += meas.iout;
-          sumPout += meas.pout;
-          count++;
+        // Record high-frequency raw sample trace
+        const rawPt: RawSample = {
+          timestamp: Date.now(),
+          relTime: Math.round(totalElapsedSec * 1000) / 1000,
+          stepIndex: point.stepIndex,
+          voltageTarget: point.voltageTarget,
+          loadTarget: point.loadTarget,
+          stepRelTime: Math.round(stepElapsedSec * 1000) / 1000,
+          isValidForAvg,
+          vin: meas.vin,
+          iin: meas.iin,
+          pin: meas.pin,
+          vout: meas.vout,
+          iout: meas.iout,
+          pout: meas.pout,
+          efficiency: meas.efficiency,
+        };
+        allRawSamples.value.push(rawPt);
+
+        // Accumulate ONLY valid samples for steady-state step average calculation
+        if (isValidForAvg) {
+          validVinList.push(meas.vin);
+          validIinList.push(meas.iin);
+          validPinList.push(meas.pin);
+          validVoutList.push(meas.vout);
+          validIoutList.push(meas.iout);
+          validPoutList.push(meas.pout);
         }
 
-        await new Promise((r) => setTimeout(r, sampleIntervalMs));
+        const loopElapsedMs = performance.now() - loopT0;
+        const sleepMs = Math.max(2, sampleIntervalMs - loopElapsedMs);
+        await new Promise((r) => setTimeout(r, sleepMs));
       }
 
       // 3. Steady State Finalization
-      if (count > 0) {
-        point.vin = Math.round((sumVin / count) * 1000) / 1000;
-        point.iin = Math.round((sumIin / count) * 1000) / 1000;
-        point.pin = Math.round((sumPin / count) * 1000) / 1000;
-        point.vout = Math.round((sumVout / count) * 1000) / 1000;
-        point.iout = Math.round((sumIout / count) * 1000) / 1000;
-        point.pout = Math.round((sumPout / count) * 1000) / 1000;
-        point.efficiency = point.pin > 0.01 ? Math.min(100, Math.round((point.pout / point.pin) * 10000) / 100) : 0;
+      if (validVinList.length > 0) {
+        const count = validVinList.length;
+        point.vin = Math.round((validVinList.reduce((a, b) => a + b, 0) / count) * 1000) / 1000;
+        point.iin = Math.round((validIinList.reduce((a, b) => a + b, 0) / count) * 1000) / 1000;
+        point.pin = Math.round((validPinList.reduce((a, b) => a + b, 0) / count) * 1000) / 1000;
+        point.vout = Math.round((validVoutList.reduce((a, b) => a + b, 0) / count) * 1000) / 1000;
+        point.iout = Math.round((validIoutList.reduce((a, b) => a + b, 0) / count) * 1000) / 1000;
+        point.pout = Math.round((validPoutList.reduce((a, b) => a + b, 0) / count) * 1000) / 1000;
+        point.efficiency = point.pin > 0.001
+          ? Math.min(100, Math.max(0, Math.round((point.pout / point.pin) * 10000) / 100))
+          : 0;
       } else {
         const lastMeas = serialManager.measure();
         point.vin = lastMeas.vin;
@@ -714,6 +904,7 @@ async function finalizeTest() {
   const plainConfig = JSON.parse(JSON.stringify(sweepConfig));
   const plainPoints = JSON.parse(JSON.stringify(matrixPoints.value));
   const plainOptimal = optimal ? JSON.parse(JSON.stringify(optimal)) : undefined;
+  const plainRawSamples = JSON.parse(JSON.stringify(allRawSamples.value));
 
   const record: TestRecord = {
     id: testId,
@@ -723,6 +914,7 @@ async function finalizeTest() {
     voltageSteps: [...activeVoltageSteps.value],
     loadSteps: [...activeLoadSteps.value],
     points: plainPoints,
+    rawSamples: plainRawSamples,
     summary: {
       totalPoints: matrixPoints.value.length,
       completedPoints: validPts.length,
@@ -747,8 +939,7 @@ async function finalizeTest() {
     colors: ['#00d2ff', '#48bb78', '#ecc94b', '#9f7aea'],
   });
 
-  // Specifically requested by user:
-  // "在测试结束后弹出的数据查看界面厘米才现实2D矩阵表和3D柱状图"
+  // Open 3D visualization window
   openResult3DWindow(testId);
 }
 
@@ -774,6 +965,11 @@ async function handleStopTest() {
 function startContinuousSampling() {
   if (sampleTimer) clearInterval(sampleTimer);
   sampleTimer = window.setInterval(() => {
+    // Check hardware connection health periodically
+    serialManager.checkHealth();
+
+    // When NOT running, only update dashboard metrics if instruments are active;
+    // CRITICAL: NEVER update latestSample.value when !isRunning.value, to prevent waveform from fluctuating before test starts!
     if (!isRunning.value) {
       const meas = serialManager.measure();
       metrics.vin = meas.vin;
@@ -783,16 +979,8 @@ function startContinuousSampling() {
       metrics.iout = meas.iout;
       metrics.pout = meas.pout;
       metrics.efficiency = meas.efficiency;
-
-      latestSample.value = {
-        t: performance.now(),
-        vin: meas.vin,
-        vout: meas.vout,
-        iin: meas.iin,
-        iout: meas.iout,
-      };
     }
-  }, 100);
+  }, 200);
 }
 
 function stopContinuousSampling() {
@@ -827,6 +1015,7 @@ function handleExportCurrentCSV() {
       voltageSteps: [...activeVoltageSteps.value],
       loadSteps: [...activeLoadSteps.value],
       points: JSON.parse(JSON.stringify(matrixPoints.value)),
+      rawSamples: JSON.parse(JSON.stringify(allRawSamples.value)),
       summary: {
         totalPoints: matrixPoints.value.length,
         completedPoints: stepResults.value.length,
@@ -866,7 +1055,9 @@ async function openHistory() {
 
 function clearCurrentData() {
   matrixPoints.value = [];
+  allRawSamples.value = [];
   currentRecord.value = null;
+  latestSample.value = undefined;
   if (waveformRef.value) waveformRef.value.clear();
   generateMatrix();
   statusText.value = '图表与数据已清空';
@@ -948,6 +1139,7 @@ function showAbout() {
 }
 
 onMounted(async () => {
+  serialManager.setOnDeviceLost(onDeviceLostDetected);
   serialManager.autoConnectVirtual();
   generateMatrix();
   startContinuousSampling();

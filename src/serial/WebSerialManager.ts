@@ -20,6 +20,8 @@ declare global {
   }
 }
 
+export type DeviceLostHandler = (deviceType: DeviceType, deviceName: string, reason: string) => void;
+
 export class DeviceDriver {
   public type: DeviceType;
   public isVirtual: boolean = true;
@@ -29,6 +31,9 @@ export class DeviceDriver {
   private encoder: TextEncoderStream | null = null;
   private decoder: TextDecoderStream | null = null;
   private readBuffer: string = '';
+  private isDisconnecting: boolean = false;
+  private onLostCallback: DeviceLostHandler | null = null;
+  private disconnectListener: ((event: any) => void) | null = null;
 
   // Virtual counterpart
   public virtualPsu: VirtualPowerSupply = new VirtualPowerSupply();
@@ -47,6 +52,33 @@ export class DeviceDriver {
     this.state.model = type === 'PSU' ? 'RIGOL DP700' : 'UNI-T UTL8500';
   }
 
+  public setOnDeviceLost(callback: DeviceLostHandler) {
+    this.onLostCallback = callback;
+  }
+
+  public handleDeviceLost(reason: string) {
+    if (!this.state.connected || this.isDisconnecting) return;
+    this.state.connected = false;
+    this.state.portName = '已丢失 (断开连接)';
+    console.error(`[WebSerial 串口丢失] 设备: ${this.type} (${this.state.model}), 原因: ${reason}`);
+    if (this.onLostCallback) {
+      this.onLostCallback(this.type, this.state.model, reason);
+    }
+  }
+
+  public checkAlive(): { alive: boolean; reason?: string } {
+    if (!this.state.connected) {
+      return { alive: false, reason: '设备连接已断开' };
+    }
+    if (this.isVirtual) {
+      const vAlive = this.type === 'PSU' ? this.virtualPsu.isConnected() : this.virtualLoad.isConnected();
+      if (!vAlive) {
+        return { alive: false, reason: '虚拟仿真设备已离线' };
+      }
+    }
+    return { alive: true };
+  }
+
   public isWebSerialSupported(): boolean {
     return typeof navigator !== 'undefined' && 'serial' in navigator;
   }
@@ -62,6 +94,18 @@ export class DeviceDriver {
     try {
       this.port = await navigator.serial!.requestPort();
       await this.port.open({ baudRate });
+
+      this.isDisconnecting = false;
+
+      // Listen for physical device unplug via Web Serial API
+      if ('serial' in navigator && (navigator.serial as any).addEventListener) {
+        this.disconnectListener = (event: any) => {
+          if (event.target === this.port) {
+            this.handleDeviceLost('物理 USB 串口硬件已被拔出或连接中断');
+          }
+        };
+        (navigator.serial as any).addEventListener('disconnect', this.disconnectListener);
+      }
 
       this.encoder = new TextEncoderStream();
       (this.encoder.readable as any).pipeTo(this.port.writable as any);
@@ -91,6 +135,7 @@ export class DeviceDriver {
    */
   public connectVirtual(): void {
     this.isVirtual = true;
+    this.isDisconnecting = false;
     this.state.connected = true;
     this.state.isVirtual = true;
     this.state.portName = this.type === 'PSU' ? 'VIRTUAL_DP700 (仿真驱动)' : 'VIRTUAL_UTL8500 (仿真驱动)';
@@ -102,7 +147,12 @@ export class DeviceDriver {
   }
 
   public async disconnect(): Promise<void> {
+    this.isDisconnecting = true;
     try {
+      if (this.disconnectListener && 'serial' in navigator && (navigator.serial as any).removeEventListener) {
+        (navigator.serial as any).removeEventListener('disconnect', this.disconnectListener);
+        this.disconnectListener = null;
+      }
       if (this.reader) {
         await this.reader.cancel().catch(() => {});
         this.reader = null;
@@ -118,6 +168,7 @@ export class DeviceDriver {
     } catch (e) {
       console.warn('Disconnect error:', e);
     } finally {
+      this.isDisconnecting = false;
       this.state.connected = false;
       this.state.portName = '未连接';
       if (this.type === 'PSU') {
@@ -133,8 +184,16 @@ export class DeviceDriver {
       // Handled internally in virtual measurement loops
       return;
     }
-    if (!this.writer) throw new Error('Port writer not initialized');
-    await this.writer.write(cmd);
+    if (!this.writer || !this.state.connected) {
+      this.handleDeviceLost('串口未连接或已丢失写入句柄');
+      throw new Error('串口未连接或写入句柄丢失');
+    }
+    try {
+      await this.writer.write(cmd);
+    } catch (err: any) {
+      this.handleDeviceLost(`向串口发送指令失败 (设备可能已断开): ${err?.message || err}`);
+      throw err;
+    }
   }
 
   private async startContinuousRead() {
@@ -142,13 +201,20 @@ export class DeviceDriver {
     try {
       while (true) {
         const { value, done } = await this.reader.read();
-        if (done) break;
+        if (done) {
+          if (this.state.connected && !this.isDisconnecting) {
+            this.handleDeviceLost('串口数据读取流意外终止 (物理设备可能已断开)');
+          }
+          break;
+        }
         if (value) {
           this.readBuffer += value;
         }
       }
-    } catch (err) {
-      console.warn('Read stream terminated:', err);
+    } catch (err: any) {
+      if (this.state.connected && !this.isDisconnecting) {
+        this.handleDeviceLost(`串口数据流读取异常: ${err?.message || err}`);
+      }
     }
   }
 }
@@ -161,11 +227,38 @@ export class WebSerialManager {
 
   public psu: DeviceDriver = new DeviceDriver('PSU');
   public load: DeviceDriver = new DeviceDriver('LOAD');
+  private onDeviceLostListener: DeviceLostHandler | null = null;
 
   private constructor() {
     // Cross-link virtual devices
     this.psu.virtualPsu.linkLoad(this.load.virtualLoad);
     this.load.virtualLoad.linkSupply(this.psu.virtualPsu);
+
+    // Forward device lost events
+    this.psu.setOnDeviceLost((type, name, reason) => {
+      if (this.onDeviceLostListener) this.onDeviceLostListener(type, name, reason);
+    });
+    this.load.setOnDeviceLost((type, name, reason) => {
+      if (this.onDeviceLostListener) this.onDeviceLostListener(type, name, reason);
+    });
+  }
+
+  public setOnDeviceLost(callback: DeviceLostHandler) {
+    this.onDeviceLostListener = callback;
+  }
+
+  public checkHealth(): { ok: boolean; failedDevice?: DeviceType; name?: string; reason?: string } {
+    const psuCheck = this.psu.checkAlive();
+    if (!psuCheck.alive) {
+      this.psu.handleDeviceLost(psuCheck.reason || '电源健康检查失败');
+      return { ok: false, failedDevice: 'PSU', name: this.psu.state.model, reason: psuCheck.reason };
+    }
+    const loadCheck = this.load.checkAlive();
+    if (!loadCheck.alive) {
+      this.load.handleDeviceLost(loadCheck.reason || '负载健康检查失败');
+      return { ok: false, failedDevice: 'LOAD', name: this.load.state.model, reason: loadCheck.reason };
+    }
+    return { ok: true };
   }
 
   public static getInstance(): WebSerialManager {
