@@ -64,6 +64,17 @@
             </div>
 
             <div style="display: flex; align-items: center; gap: 6px;">
+              <select
+                v-if="!serialManager.psu.state.connected && !isSimulationMode"
+                v-model.number="psuBaud"
+                style="padding: 2px 4px; font-size: 11px; background: #1a202c; color: #e2e8f0; border: 1px solid #4a5568; border-radius: 4px;"
+                title="选择电源波特率"
+              >
+                <option :value="115200">115200</option>
+                <option :value="9600">9600</option>
+                <option :value="19200">19200</option>
+                <option :value="38400">38400</option>
+              </select>
               <button
                 class="btn"
                 :style="{ backgroundColor: serialManager.psu.state.connected ? '#742a2a' : '#234e52', color: 'white' }"
@@ -219,6 +230,17 @@
             </div>
 
             <div style="display: flex; align-items: center; gap: 6px;">
+              <select
+                v-if="!serialManager.load.state.connected && !isSimulationMode"
+                v-model.number="loadBaud"
+                style="padding: 2px 4px; font-size: 11px; background: #1a202c; color: #e2e8f0; border: 1px solid #4a5568; border-radius: 4px;"
+                title="选择负载波特率"
+              >
+                <option :value="115200">115200</option>
+                <option :value="9600">9600</option>
+                <option :value="19200">19200</option>
+                <option :value="38400">38400</option>
+              </select>
               <button
                 class="btn"
                 :style="{ backgroundColor: serialManager.load.state.connected ? '#742a2a' : '#234e52', color: 'white' }"
@@ -416,7 +438,9 @@ import { WebSerialManager } from '../serial/WebSerialManager';
 
 const serialManager = WebSerialManager.getInstance();
 
-const isSimulationMode = ref(serialManager.psu.isVirtual);
+const isSimulationMode = ref(false);
+const psuBaud = ref(115200);
+const loadBaud = ref(115200);
 
 // PSU state
 const psuSetV = ref(5.0);
@@ -553,8 +577,8 @@ async function togglePsuConnection() {
         serialManager.psu.connectVirtual();
         addLog('[PSU] 虚拟仿真电源驱动已连接', '#3fb950');
       } else {
-        await serialManager.psu.connectPhysical(9600);
-        addLog('[PSU] 物理电源串口连接成功', '#3fb950');
+        await serialManager.psu.connectPhysical(psuBaud.value);
+        addLog(`[PSU] 物理电源串口连接成功 (${psuBaud.value}bps)`, '#3fb950');
         const psuStat = await serialManager.queryPsuStatus();
         isPsuOutputOn.value = psuStat.outputOn;
         if (psuStat.setVoltage > 0) psuSetV.value = psuStat.setVoltage;
@@ -630,8 +654,8 @@ async function toggleLoadConnection() {
         serialManager.load.connectVirtual();
         addLog('[LOAD] 虚拟仿真电子负载驱动已连接', '#3fb950');
       } else {
-        await serialManager.load.connectPhysical(9600);
-        addLog('[LOAD] 物理电子负载串口连接成功', '#3fb950');
+        await serialManager.load.connectPhysical(loadBaud.value);
+        addLog(`[LOAD] 物理电子负载串口连接成功 (${loadBaud.value}bps)`, '#3fb950');
         const loadStat = await serialManager.queryLoadStatus();
         isLoadInputOn.value = loadStat.inputOn;
         loadMode.value = loadStat.mode;

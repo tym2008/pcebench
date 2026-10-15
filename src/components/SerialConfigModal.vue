@@ -44,10 +44,10 @@
 
           <div style="display: flex; align-items: center; gap: 6px;">
             <select v-model.number="psuBaud" :disabled="psuConnected" style="flex: 1;">
-              <option :value="9600">9600 bps (标准)</option>
+              <option :value="115200">115200 bps (默认)</option>
+              <option :value="9600">9600 bps</option>
               <option :value="19200">19200 bps</option>
               <option :value="38400">38400 bps</option>
-              <option :value="115200">115200 bps</option>
             </select>
 
             <button
@@ -81,10 +81,10 @@
 
           <div style="display: flex; align-items: center; gap: 6px;">
             <select v-model.number="loadBaud" :disabled="loadConnected" style="flex: 1;">
-              <option :value="9600">9600 bps (标准)</option>
+              <option :value="115200">115200 bps (默认)</option>
+              <option :value="9600">9600 bps</option>
               <option :value="19200">19200 bps</option>
               <option :value="38400">38400 bps</option>
-              <option :value="115200">115200 bps</option>
             </select>
 
             <button
@@ -140,6 +140,6 @@ defineEmits<{
   (e: 'disconnect-load'): void;
 }>();
 
-const psuBaud = ref(9600);
-const loadBaud = ref(9600);
+const psuBaud = ref(115200);
+const loadBaud = ref(115200);
 </script>

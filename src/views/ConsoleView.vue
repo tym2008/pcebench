@@ -563,7 +563,7 @@ const serialManager = WebSerialManager.getInstance();
 const openMenu = ref<string | null>(null);
 const isHistoryOpen = ref(false);
 const isSerialModalOpen = ref(false);
-const isSimulationMode = ref(true);
+const isSimulationMode = ref(false);
 const historyRecords = ref<TestRecord[]>([]);
 
 // Device Lost Alert Modal State (Requested: 串口丢失全局弹窗警告并暂停测试)
@@ -764,7 +764,14 @@ async function abortAndSaveCurrent() {
 
 async function handleStartTest() {
   if (!serialManager.isBothConnected()) {
-    serialManager.autoConnectVirtual();
+    if (isSimulationMode.value) {
+      serialManager.autoConnectVirtual();
+    } else {
+      isSerialModalOpen.value = true;
+      statusText.value = '未检测到仪器硬件连接，请先配置串口（默认 115200bps）或开启仿真演示模式';
+      alert('未检测到物理仪器连接！\n\n请在弹出的【仪器串口硬件连接】窗口中选择对应的串口设备（默认波特率 115200）；\n或在左侧面板顶部勾选【🧪 启用仿真演示模式】以进行虚拟测试。');
+      return;
+    }
   }
 
   generateMatrix();
@@ -1316,7 +1323,9 @@ function handleBeforeUnload() {
 
 onMounted(async () => {
   serialManager.setOnDeviceLost(onDeviceLostDetected);
-  serialManager.autoConnectVirtual();
+  if (isSimulationMode.value) {
+    serialManager.autoConnectVirtual();
+  }
   generateMatrix();
   startContinuousSampling();
   await refreshHistoryList();

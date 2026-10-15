@@ -47,7 +47,7 @@ export interface SystemTelemetry {
 
 export class DeviceDriver {
   public type: DeviceType;
-  public isVirtual: boolean = true;
+  public isVirtual: boolean = false;
   private port: SerialPort | null = null;
   private reader: ReadableStreamDefaultReader<string> | null = null;
   private writer: WritableStreamDefaultWriter<string> | null = null;
@@ -68,9 +68,9 @@ export class DeviceDriver {
   public state: DeviceConnectionState = {
     connected: false,
     portName: '未连接',
-    isVirtual: true,
+    isVirtual: false,
     model: '',
-    baudRate: 9600,
+    baudRate: 115200,
   };
 
   constructor(type: DeviceType) {
@@ -120,7 +120,7 @@ export class DeviceDriver {
   /**
    * Connect using browser Web Serial API
    */
-  public async connectPhysical(baudRate: number = 9600): Promise<boolean> {
+  public async connectPhysical(baudRate: number = 115200): Promise<boolean> {
     if (!this.isWebSerialSupported()) {
       throw new Error('当前浏览器不支持 Web Serial API，请使用 Chrome / Edge 浏览器，或使用内置仿真模式。');
     }
@@ -205,6 +205,8 @@ export class DeviceDriver {
       this.isDisconnecting = false;
       this.state.connected = false;
       this.state.portName = '未连接';
+      this.isVirtual = false;
+      this.state.isVirtual = false;
       if (this.type === 'PSU') {
         this.virtualPsu.setConnected(false);
       } else {
@@ -479,15 +481,19 @@ export class WebSerialManager {
   }
 
   public checkHealth(): { ok: boolean; failedDevice?: DeviceType; name?: string; reason?: string } {
-    const psuCheck = this.psu.checkAlive();
-    if (!psuCheck.alive) {
-      this.psu.handleDeviceLost(psuCheck.reason || '电源健康检查失败');
-      return { ok: false, failedDevice: 'PSU', name: this.psu.state.model, reason: psuCheck.reason };
+    if (this.psu.state.connected) {
+      const psuCheck = this.psu.checkAlive();
+      if (!psuCheck.alive) {
+        this.psu.handleDeviceLost(psuCheck.reason || '电源健康检查失败');
+        return { ok: false, failedDevice: 'PSU', name: this.psu.state.model, reason: psuCheck.reason };
+      }
     }
-    const loadCheck = this.load.checkAlive();
-    if (!loadCheck.alive) {
-      this.load.handleDeviceLost(loadCheck.reason || '负载健康检查失败');
-      return { ok: false, failedDevice: 'LOAD', name: this.load.state.model, reason: loadCheck.reason };
+    if (this.load.state.connected) {
+      const loadCheck = this.load.checkAlive();
+      if (!loadCheck.alive) {
+        this.load.handleDeviceLost(loadCheck.reason || '负载健康检查失败');
+        return { ok: false, failedDevice: 'LOAD', name: this.load.state.model, reason: loadCheck.reason };
+      }
     }
     return { ok: true };
   }
