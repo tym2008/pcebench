@@ -92,6 +92,14 @@ export class DeviceDriver {
     }
   }
 
+  public handleDeviceUnresponsive(reason: string) {
+    if (this.isDisconnecting) return;
+    console.warn(`[WebSerial 仪器未响应] 设备: ${this.type} (${this.state.model}), 原因: ${reason}`);
+    if (this.onLostCallback) {
+      this.onLostCallback(this.type, this.state.model, reason);
+    }
+  }
+
   public checkAlive(): { alive: boolean; reason?: string } {
     if (!this.state.connected) {
       return { alive: false, reason: '设备连接已断开' };
@@ -207,6 +215,7 @@ export class DeviceDriver {
 
   /**
    * Serialized physical command write
+   * Strictly enforces exactly ONE '\n' at the end, eliminating any '\r' or multiple newlines
    */
   public async write(cmd: string): Promise<void> {
     if (this.isVirtual) {
@@ -220,7 +229,12 @@ export class DeviceDriver {
     return new Promise<void>((resolve, reject) => {
       this.commandQueue = this.commandQueue.then(async () => {
         try {
-          const formatted = cmd.endsWith('\n') ? cmd : cmd + '\n';
+          const sanitized = cmd.replace(/\r/g, '').replace(/[\r\n]+$/g, '').trim();
+          if (!sanitized) {
+            resolve();
+            return;
+          }
+          const formatted = sanitized + '\n';
           await this.writer!.write(formatted);
           // Safety guard time between physical serial transmissions
           await new Promise(r => setTimeout(r, 15));
@@ -235,8 +249,9 @@ export class DeviceDriver {
 
   /**
    * Serialized physical SCPI Query-Response
+   * Includes 1 retry attempt before reporting timeout failure
    */
-  public async query(cmd: string, timeoutMs: number = 300): Promise<string> {
+  public async query(cmd: string, timeoutMs: number = 350, maxRetries: number = 1): Promise<string> {
     if (this.isVirtual) {
       return this.handleVirtualQuery(cmd);
     }
@@ -247,12 +262,20 @@ export class DeviceDriver {
 
     return new Promise<string>((resolve, reject) => {
       this.commandQueue = this.commandQueue.then(async () => {
-        try {
-          const res = await this.executePhysicalQuery(cmd, timeoutMs);
-          resolve(res);
-        } catch (err) {
-          reject(err);
+        let lastErr: any = null;
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+          try {
+            const res = await this.executePhysicalQuery(cmd, timeoutMs);
+            resolve(res);
+            return;
+          } catch (err) {
+            lastErr = err;
+            if (attempt < maxRetries) {
+              await new Promise(r => setTimeout(r, 20));
+            }
+          }
         }
+        reject(lastErr);
       });
     });
   }
@@ -262,7 +285,12 @@ export class DeviceDriver {
       throw new Error('串口未连接或已丢失写入句柄');
     }
 
-    const formattedCmd = cmd.trim().endsWith('\n') ? cmd.trim() + '\n' : cmd.trim() + '\n';
+    // Strictly ensure exactly ONE '\n' at the end, and no '\r'
+    const sanitized = cmd.replace(/\r/g, '').replace(/[\r\n]+$/g, '').trim();
+    if (!sanitized) {
+      throw new Error('查询指令为空');
+    }
+    const formattedCmd = sanitized + '\n';
     this.readBuffer = '';
 
     try {
@@ -273,7 +301,7 @@ export class DeviceDriver {
     }
 
     const startTime = performance.now();
-    const cleanCmd = cmd.trim().toUpperCase();
+    const upperCleanCmd = sanitized.toUpperCase();
 
     while (performance.now() - startTime < timeoutMs) {
       const nlMatch = this.readBuffer.search(/[\r\n]/);
@@ -287,7 +315,8 @@ export class DeviceDriver {
 
         if (!rawLine) continue;
         const upperLine = rawLine.toUpperCase();
-        if (upperLine === cleanCmd || upperLine === cleanCmd.replace(/^:/, '')) {
+        // Ignore echo if instrument echoes commands
+        if (upperLine === upperCleanCmd || upperLine === upperCleanCmd.replace(/^:/, '')) {
           continue;
         }
         // Small guard pause after receiving response to ensure instrument UART is clear
@@ -299,7 +328,10 @@ export class DeviceDriver {
 
     const fallback = this.readBuffer.trim();
     this.readBuffer = '';
-    return fallback;
+    if (fallback) {
+      return fallback;
+    }
+    throw new Error(`[${this.type}] 设备未响应指令 (超时 ${timeoutMs}ms): ${sanitized}`);
   }
 
   private handleVirtualQuery(cmd: string): string {
@@ -416,6 +448,16 @@ export class WebSerialManager {
   public lastPsuStatus: PsuStatus = { outputOn: false, setVoltage: 0, setCurrentLimit: 0 };
   public lastLoadStatus: LoadStatus = { inputOn: false, mode: 'CC', targetVal: 0, isShort: false };
 
+  // Testing lifecycle & consecutive failure tracking
+  public isTesting: boolean = false;
+  private psuConsecutiveFailures: number = 0;
+  private loadConsecutiveFailures: number = 0;
+
+  public resetFailureCounters(): void {
+    this.psuConsecutiveFailures = 0;
+    this.loadConsecutiveFailures = 0;
+  }
+
   private constructor() {
     // Cross-link virtual devices
     this.psu.virtualPsu.linkLoad(this.load.virtualLoad);
@@ -460,6 +502,7 @@ export class WebSerialManager {
   }
 
   public autoConnectVirtual() {
+    this.resetFailureCounters();
     if (!this.psu.state.connected) this.psu.connectVirtual();
     if (!this.load.state.connected) this.load.connectVirtual();
   }
@@ -524,21 +567,32 @@ export class WebSerialManager {
       return this.psu.virtualPsu.measure();
     }
     if (!this.psu.state.connected) {
+      if (this.isTesting) {
+        this.psu.handleDeviceLost('直流电源串口未连接');
+        throw new Error('直流电源串口未连接');
+      }
       return { vin: 0, iin: 0, pin: 0 };
     }
     try {
-      const resp = await this.psu.query(DP700Protocol.measureAll(), 300);
+      const resp = await this.psu.query(DP700Protocol.measureAll(), 400, 1);
       const parts = resp.split(',').map(s => parseFloat(s.trim()));
       if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
         const vin = Math.max(0, parts[0]);
         const iin = Math.max(0, parts[1]);
         const pin = parts.length >= 3 && !isNaN(parts[2]) ? Math.max(0, parts[2]) : Math.round(vin * iin * 1000) / 1000;
+        this.psuConsecutiveFailures = 0;
         return { vin, iin, pin };
       }
-    } catch (e) {
-      console.warn('[PSU measureAll error]:', e);
+      throw new Error(`电源返回遥测数据格式无效: "${resp}"`);
+    } catch (e: any) {
+      this.psuConsecutiveFailures++;
+      console.warn(`[PSU measureAll error count: ${this.psuConsecutiveFailures}]:`, e);
+      if (this.isTesting && this.psuConsecutiveFailures >= 2) {
+        this.psu.handleDeviceUnresponsive(`直流电源突然未响应指令 (超时无回复): ${e?.message || e}`);
+        throw new Error(`直流电源 [RIGOL DP700] 突然未响应指令: ${e?.message || e}`);
+      }
+      return { vin: 0, iin: 0, pin: 0 };
     }
-    return { vin: 0, iin: 0, pin: 0 };
   }
 
   /**
@@ -550,19 +604,32 @@ export class WebSerialManager {
       return this.load.virtualLoad.measure(supplyVin);
     }
     if (!this.load.state.connected) {
+      if (this.isTesting) {
+        this.load.handleDeviceLost('电子负载串口未连接');
+        throw new Error('电子负载串口未连接');
+      }
       return { vout: 0, iout: 0, pout: 0 };
     }
     try {
-      const vStr = await this.load.query(UTL8500Protocol.measureVolt(), 250);
-      const iStr = await this.load.query(UTL8500Protocol.measureCurr(), 250);
-      const vout = Math.max(0, parseFloat(vStr) || 0);
-      const iout = Math.max(0, parseFloat(iStr) || 0);
-      const pout = Math.round(vout * iout * 1000) / 1000;
-      return { vout, iout, pout };
-    } catch (e) {
-      console.warn('[LOAD measure error]:', e);
+      const vStr = await this.load.query(UTL8500Protocol.measureVolt(), 350, 1);
+      const iStr = await this.load.query(UTL8500Protocol.measureCurr(), 350, 1);
+      const vout = parseFloat(vStr);
+      const iout = parseFloat(iStr);
+      if (!isNaN(vout) && !isNaN(iout) && vStr.trim() !== '' && iStr.trim() !== '') {
+        this.loadConsecutiveFailures = 0;
+        const pout = Math.round(vout * iout * 1000) / 1000;
+        return { vout: Math.max(0, vout), iout: Math.max(0, iout), pout };
+      }
+      throw new Error(`负载返回遥测数据格式无效: V="${vStr}", I="${iStr}"`);
+    } catch (e: any) {
+      this.loadConsecutiveFailures++;
+      console.warn(`[LOAD measure error count: ${this.loadConsecutiveFailures}]:`, e);
+      if (this.isTesting && this.loadConsecutiveFailures >= 2) {
+        this.load.handleDeviceUnresponsive(`电子负载突然未响应指令 (超时无回复): ${e?.message || e}`);
+        throw new Error(`电子负载 [UNI-T UTL8500] 突然未响应指令: ${e?.message || e}`);
+      }
+      return { vout: 0, iout: 0, pout: 0 };
     }
-    return { vout: 0, iout: 0, pout: 0 };
   }
 
   /**
@@ -776,23 +843,23 @@ export class WebSerialManager {
   }
 
   public async sendPsuRawSCPI(cmd: string): Promise<string> {
-    const cleanCmd = cmd.trim();
+    const cleanCmd = cmd.replace(/\r/g, '').replace(/[\r\n]+$/g, '').trim();
     if (!cleanCmd) return '';
     if (cleanCmd.includes('?')) {
       return await this.psu.query(cleanCmd);
     } else {
-      await this.psu.write(cleanCmd + '\n');
+      await this.psu.write(cleanCmd);
       return '已发送指令至电源串口';
     }
   }
 
   public async sendLoadRawSCPI(cmd: string): Promise<string> {
-    const cleanCmd = cmd.trim();
+    const cleanCmd = cmd.replace(/\r/g, '').replace(/[\r\n]+$/g, '').trim();
     if (!cleanCmd) return '';
     if (cleanCmd.includes('?')) {
       return await this.load.query(cleanCmd);
     } else {
-      await this.load.write(cleanCmd + '\n');
+      await this.load.write(cleanCmd);
       return '已发送指令至负载串口';
     }
   }

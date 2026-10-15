@@ -468,7 +468,7 @@
       @disconnect-load="handleDisconnectLoad"
     />
 
-    <!-- 6. Global Serial Device Lost Warning Modal (Requested: 全局弹窗警告并暂停测试) -->
+    <!-- 6. Global Serial Device Lost / Unresponsive Warning Modal (Requested: 全局弹窗警告并暂停测试) -->
     <div v-if="deviceLostModal.visible" class="device-lost-overlay" @click.self="deviceLostModal.visible = false">
       <div class="device-lost-modal">
         <div class="device-lost-header">
@@ -479,7 +479,7 @@
               <line x1="12" y1="17" x2="12.01" y2="17"></line>
             </svg>
             <span style="font-size: 14px; font-weight: bold; color: #fc8181;">
-              ⚠️ 串口硬件设备异常丢失警告！
+              ⚠️ 仪器突然未响应指令 / 串口通信异常告警！
             </span>
           </div>
           <button class="btn" style="padding: 2px 7px;" @click="deviceLostModal.visible = false">✕</button>
@@ -488,22 +488,22 @@
         <div class="device-lost-body">
           <div class="device-lost-alert-banner">
             <div style="font-weight: bold; color: #feb2b2; margin-bottom: 4px; font-size: 13px;">
-              ⚠️ 检测到串口通信链路中断 / 硬件连接丢失！
+              ⚠️ 测试过程中仪器突然停止响应指令或连接中断！
             </div>
             <div style="font-size: 11.5px; color: #fed7d7;">
-              为保护被测芯片及仪器电路安全，测试引擎已自动紧急暂停 (PAUSED)，电源输出已安全切断。
+              为保护被测芯片及仪器电路安全，测试引擎已自动紧急暂停 (PAUSED)，仪器输出已安全保护切断。
             </div>
           </div>
 
           <div class="device-lost-info-grid">
             <div class="info-row">
-              <span class="info-label">丢失仪器:</span>
+              <span class="info-label">未响应仪器:</span>
               <span class="info-val" style="color: #ecc94b; font-weight: bold;">
                 {{ deviceLostModal.deviceType === 'PSU' ? '直流电源 (PSU)' : '电子负载 (Electronic Load)' }} - {{ deviceLostModal.deviceName }}
               </span>
             </div>
             <div class="info-row">
-              <span class="info-label">异常原因:</span>
+              <span class="info-label">异常详情:</span>
               <span class="info-val" style="color: #fc8181; font-weight: 500;">{{ deviceLostModal.reason }}</span>
             </div>
             <div class="info-row">
@@ -517,16 +517,19 @@
           </div>
 
           <p style="font-size: 11.5px; color: #a0aec0; margin: 12px 0 0 0; line-height: 1.5;">
-            请检查设备电源及 USB 串口线物理连接。重新连接后可点击【恢复测试】无缝继续；亦可一键切换为内置仿真模式继续验证。
+            请检查仪器面板状态、USB 串口线连接或仪器供电。排除故障后可点击【重试并恢复测试】继续执行；亦可切换为仿真模式或终止并保存数据。
           </p>
         </div>
 
         <div class="device-lost-footer">
-          <button class="btn btn-primary" style="font-weight: bold;" @click="openSerialModalFromLoss">
+          <button class="btn btn-primary" style="font-weight: bold;" @click="resumeAfterDeviceRecovered">
+            ▶ 重试并恢复测试
+          </button>
+          <button class="btn" style="font-weight: bold; border-color: #4a5568;" @click="openSerialModalFromLoss">
             ⚙ 重新连接串口硬件
           </button>
           <button class="btn btn-warning" style="font-weight: bold;" @click="switchToVirtualAndResume">
-            🧪 切换仿真模式并继续测试
+            🧪 切换仿真模式继续
           </button>
           <button class="btn btn-danger" @click="abortAndSaveCurrent">
             💾 终止测试并保存已测结果
@@ -547,7 +550,8 @@ import confetti from 'canvas-confetti';
 import WaveformChart, { WaveformPoint } from '../components/WaveformChart.vue';
 import HistoryModal from '../components/HistoryModal.vue';
 import SerialConfigModal from '../components/SerialConfigModal.vue';
-import { WebSerialManager } from '../serial/WebSerialManager';
+import { WebSerialManager, SystemTelemetry } from '../serial/WebSerialManager';
+import { DP700Protocol, UTL8500Protocol } from '../serial/SCPIProtocol';
 import { SweepConfig, MatrixPoint, TestRecord, RawSample, DeviceType, DashboardMetrics as IDashboardMetrics } from '../types/test';
 import { saveTestRecord, getAllTestRecords, deleteTestRecord } from '../storage/indexedDB';
 import { exportRecordToCSV } from '../utils/csvExport';
@@ -710,11 +714,45 @@ function openSerialModalFromLoss() {
   isSerialModalOpen.value = true;
 }
 
+async function resumeAfterDeviceRecovered() {
+  serialManager.resetFailureCounters();
+  try {
+    statusText.value = '正在检测仪器响应并尝试恢复...';
+    if (!serialManager.psu.isVirtual && serialManager.psu.state.connected) {
+      await serialManager.psu.query(DP700Protocol.getApply(), 400);
+    }
+    if (!serialManager.load.isVirtual && serialManager.load.state.connected) {
+      await serialManager.load.query(UTL8500Protocol.getMode(), 400);
+    }
+
+    // Re-apply step settings if currently testing
+    if (isRunning.value && metrics.activeTargetV > 0) {
+      await serialManager.setPsuOutput(true, metrics.activeTargetV, sweepConfig.inputCurrentLimit);
+      await serialManager.setLoadInput(true, sweepConfig.loadMode, metrics.activeTargetLoad);
+    }
+
+    deviceLostModal.visible = false;
+    isPaused.value = false;
+    statusText.value = '仪器通信已恢复正常，测试继续进行...';
+  } catch (err: any) {
+    statusText.value = `⚠️ 恢复失败: ${err?.message || err}，请检查物理设备与连接`;
+  }
+}
+
 async function switchToVirtualAndResume() {
   deviceLostModal.visible = false;
   isSimulationMode.value = true;
   serialManager.autoConnectVirtual();
-  statusText.value = '已切换为仿真驱动模式，测试已恢复';
+  serialManager.resetFailureCounters();
+  if (isRunning.value && metrics.activeTargetV > 0) {
+    try {
+      await serialManager.setPsuOutput(true, metrics.activeTargetV, sweepConfig.inputCurrentLimit);
+      await serialManager.setLoadInput(true, sweepConfig.loadMode, metrics.activeTargetLoad);
+    } catch (e) {
+      console.warn('Re-apply virtual step targets warning:', e);
+    }
+  }
+  statusText.value = '已切换为仿真驱动模式，测试已恢复继续';
   isPaused.value = false;
 }
 
@@ -736,6 +774,8 @@ async function handleStartTest() {
 
   isRunning.value = true;
   isPaused.value = false;
+  serialManager.isTesting = true;
+  serialManager.resetFailureCounters();
   abortController = new AbortController();
   statusText.value = '正在执行全自动 2D 矩阵效率测试...';
 
@@ -767,12 +807,25 @@ async function handleStartTest() {
       // 2. Send Hardware Commands
       try {
         await serialManager.setPsuOutput(true, point.voltageTarget, sweepConfig.inputCurrentLimit);
-        await serialManager.setLoadInput(true, sweepConfig.loadMode, point.loadTarget);
       } catch (cmdErr: any) {
         onDeviceLostDetected(
           'PSU',
           serialManager.psu.state.model,
-          `发送控制指令失败: ${cmdErr?.message || cmdErr}`
+          `直流电源下发控制指令未响应/写入失败: ${cmdErr?.message || cmdErr}`
+        );
+        while (isPaused.value && !abortController.signal.aborted) {
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        if (abortController.signal.aborted) break;
+      }
+
+      try {
+        await serialManager.setLoadInput(true, sweepConfig.loadMode, point.loadTarget);
+      } catch (cmdErr: any) {
+        onDeviceLostDetected(
+          'LOAD',
+          serialManager.load.state.model,
+          `电子负载下发控制指令未响应/写入失败: ${cmdErr?.message || cmdErr}`
         );
         while (isPaused.value && !abortController.signal.aborted) {
           await new Promise((r) => setTimeout(r, 200));
@@ -795,7 +848,16 @@ async function handleStartTest() {
           }
 
           const loopT0 = performance.now();
-          const meas = await serialManager.measureAsync();
+          let meas: SystemTelemetry;
+          try {
+            meas = await serialManager.measureAsync();
+          } catch (measErr: any) {
+            while (isPaused.value && !abortController.signal.aborted) {
+              await new Promise((r) => setTimeout(r, 200));
+            }
+            if (abortController.signal.aborted) break;
+            continue;
+          }
 
           // Update dashboard metrics
           metrics.vin = meas.vin;
@@ -886,7 +948,16 @@ async function handleStartTest() {
           ? (stepElapsedSec >= filterMarginSec && stepElapsedSec <= (stepDurationSec - filterMarginSec))
           : true;
 
-        const meas = await serialManager.measureAsync();
+        let meas: SystemTelemetry;
+        try {
+          meas = await serialManager.measureAsync();
+        } catch (measErr: any) {
+          while (isPaused.value && !abortController.signal.aborted) {
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          if (abortController.signal.aborted) break;
+          continue;
+        }
 
         // Real-time telemetry dashboard values
         metrics.vin = meas.vin;
@@ -979,6 +1050,7 @@ async function handleStartTest() {
   } finally {
     isRunning.value = false;
     isPaused.value = false;
+    serialManager.isTesting = false;
     stopContinuousSampling();
   }
 }
@@ -1059,7 +1131,17 @@ function handlePauseTest() {
   statusText.value = '测试已暂停';
 }
 
-function handleResumeTest() {
+async function handleResumeTest() {
+  serialManager.resetFailureCounters();
+  try {
+    if (metrics.activeTargetV > 0) {
+      await serialManager.setPsuOutput(true, metrics.activeTargetV, sweepConfig.inputCurrentLimit);
+      await serialManager.setLoadInput(true, sweepConfig.loadMode, metrics.activeTargetLoad);
+    }
+  } catch (e) {
+    console.warn('Re-applying step targets on resume warning:', e);
+  }
+  deviceLostModal.visible = false;
   isPaused.value = false;
   statusText.value = '测试已继续运行';
 }
@@ -1068,9 +1150,10 @@ async function handleStopTest() {
   if (abortController) abortController.abort();
   isRunning.value = false;
   isPaused.value = false;
+  serialManager.isTesting = false;
   await serialManager.emergencyStopAll();
   stopContinuousSampling();
-  statusText.value = '测试已手动终止';
+  statusText.value = '测试已手动终止，仪器输出已安全切断';
 }
 
 let isContinuousSamplingBusy = false;
@@ -1236,6 +1319,7 @@ function handleConnectVirtual() {
 async function handleConnectPhysicalPsu(baud: number) {
   try {
     await serialManager.psu.connectPhysical(baud);
+    serialManager.resetFailureCounters();
     isSimulationMode.value = false;
     statusText.value = `电源串口已连接 (${baud}bps)`;
     await serialManager.queryPsuStatus();
@@ -1252,6 +1336,7 @@ async function handleDisconnectPsu() {
 async function handleConnectPhysicalLoad(baud: number) {
   try {
     await serialManager.load.connectPhysical(baud);
+    serialManager.resetFailureCounters();
     isSimulationMode.value = false;
     statusText.value = `负载串口已连接 (${baud}bps)`;
     await serialManager.queryLoadStatus();
