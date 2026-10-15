@@ -1,56 +1,105 @@
 /**
- * Standard SCPI & Manufacturer Command Formatter for RIGOL DP700 and UNI-T UTL8500+
- * Strictly conforms to:
- * - RIGOL DP700 Series Programming Guide (:MEASure:ALL? CH1, :OUTPut? CH1, etc.)
- * - UNI-T UTL8500+ Programming Manual (:MODE CURR/VOLT/POW/RES, :INP 1/0, :INP:SHOR 1/0, etc.)
+ * Standard SCPI & Manufacturer Command Formatter for:
+ * 1. RIGOL DP700 Series Power Supply (DP711 / DP712)
+ *    - Manual: DP700 Programming Guide
+ *    - Commands: :APPLy, :OUTPut, :VOLTage, :CURRent, :MEASure:ALL?
+ * 2. UNI-T UTL8500+ Series Programmable Electronic Load
+ *    - Manual: UTL8500+ Programming Manual
+ *    - Commands: :MODE (CURR|VOLT|POW|RES), :INP (1|0), :CURR, :VOLT, :POW, :RES, :INP:SHOR (1|0)
+ *
+ * CRITICAL: The two devices have completely distinct command sets!
+ * NEVER mix or cross-send commands between PSU and Load!
  */
 
 export class DP700Protocol {
+  /**
+   * Set voltage and current limit simultaneously:
+   * Manual p. 2-2: :APPLy CH1,<voltage>,<current>
+   * Example: :APPLy CH1,5.000,1.000\n
+   */
   public static setVoltageAndLimit(voltage: number, limitCurrent: number): string {
-    return `:APPL CH1,${voltage.toFixed(3)},${limitCurrent.toFixed(3)}\n`;
-  }
-
-  public static setVoltage(voltage: number): string {
-    return `:VOLT ${voltage.toFixed(3)}\n`;
-  }
-
-  public static setCurrentLimit(limitCurrent: number): string {
-    return `:CURR ${limitCurrent.toFixed(3)}\n`;
-  }
-
-  public static setOutput(on: boolean): string {
-    return `:OUTP CH1,${on ? 'ON' : 'OFF'}\n`;
+    return `:APPLy CH1,${voltage.toFixed(3)},${limitCurrent.toFixed(3)}\n`;
   }
 
   /**
-   * RIGOL DP700 composite measurement query: returns "<voltage>,<current>,<power>\n"
-   * e.g. "12.000,0.500,6.000" in a single query round trip.
+   * Set voltage alone:
+   * Manual p. 2-25: [:SOURce[<n>]]:VOLTage[:LEVel][:IMMediate][:AMPLitude] <voltage>
+   * Example: :VOLTage 12.000\n
    */
-  public static measureAll(channel: string = 'CH1'): string {
-    return `:MEASure:ALL? ${channel}\n`;
+  public static setVoltage(voltage: number): string {
+    return `:VOLTage ${voltage.toFixed(3)}\n`;
   }
 
-  public static getOutput(channel: string = 'CH1'): string {
-    return `:OUTPut? ${channel}\n`;
+  /**
+   * Set current limit alone:
+   * Manual p. 2-22: [:SOURce[<n>]]:CURRent[:LEVel][:IMMediate][:AMPLitude] <current>
+   * Example: :CURRent 2.000\n
+   */
+  public static setCurrentLimit(limitCurrent: number): string {
+    return `:CURRent ${limitCurrent.toFixed(3)}\n`;
   }
 
-  public static getVoltage(channel: string = 'CH1'): string {
-    return `:VOLTage? ${channel}\n`;
+  /**
+   * Set output state:
+   * Manual p. 2-21: :OUTPut[:STATe] [<channel>,]<state>
+   * Example: :OUTPut CH1,ON\n or :OUTPut CH1,OFF\n
+   */
+  public static setOutput(on: boolean): string {
+    return `:OUTPut CH1,${on ? 'ON' : 'OFF'}\n`;
   }
 
-  public static getCurrentLimit(channel: string = 'CH1'): string {
-    return `:CURRent? ${channel}\n`;
+  /**
+   * Query output state:
+   * Manual p. 2-21: :OUTPut[:STATe]? [<channel>]
+   * Returns: ON or OFF
+   */
+  public static getOutput(): string {
+    return `:OUTPut? CH1\n`;
+  }
+
+  /**
+   * Query set voltage and current limit together:
+   * Manual p. 2-2: :APPLy? [<channel>]
+   * Returns: "<voltage>,<current>" (e.g. "5.00,1.00")
+   */
+  public static getApply(): string {
+    return `:APPLy? CH1\n`;
+  }
+
+  /**
+   * Query set voltage alone:
+   * Manual p. 2-25: :VOLTage?
+   * NOTE: In DP700 manual, :VOLTage? does NOT accept channel argument. Do NOT append CH1!
+   */
+  public static getVoltage(): string {
+    return `:VOLTage?\n`;
+  }
+
+  /**
+   * Query set current limit alone:
+   * Manual p. 2-22: :CURRent?
+   * NOTE: In DP700 manual, :CURRent? does NOT accept channel argument. Do NOT append CH1!
+   */
+  public static getCurrentLimit(): string {
+    return `:CURRent?\n`;
+  }
+
+  /**
+   * Query measured parameters (V, I, P) in a single query:
+   * Manual p. 2-9: :MEASure:ALL[:DC]? [<channel>]
+   * Returns: "<voltage>,<current>,<power>" (e.g. "12.000,0.500,6.000")
+   */
+  public static measureAll(): string {
+    return `:MEASure:ALL? CH1\n`;
   }
 }
 
 export class UTL8500Protocol {
   /**
-   * According to UTL8500+ manual Page 7-8:
-   * Modes are: CURRENT (CURR), VOLTage (VOLT), POWer (POW), RESistance (RES).
-   * CC -> CURR
-   * CV -> VOLT
-   * CW / CP -> POW
-   * CR -> RES
+   * Set working mode:
+   * Manual p. 7-8: [SOURce:]MODE <function>
+   * Valid arguments: CURRENT (CURR), VOLTage (VOLT), POWer (POW), RESistance (RES)
+   * Note: UTL8500 rejects CC, CV, CP, CR! Must use CURR, VOLT, POW, RES.
    */
   public static setMode(mode: 'CC' | 'CW' | 'CV' | 'CR'): string {
     let m = 'CURR';
@@ -61,10 +110,19 @@ export class UTL8500Protocol {
     return `:MODE ${m}\n`;
   }
 
+  /**
+   * Query working mode:
+   * Manual p. 8: MODE?
+   * Returns: CURR, VOLT, POW, RES
+   */
   public static getMode(): string {
     return `:MODE?\n`;
   }
 
+  /**
+   * Set CC current:
+   * Manual p. 11: [SOURce:]CURRent <val>
+   */
   public static setCurrent(current: number): string {
     return `:CURR ${current.toFixed(3)}\n`;
   }
@@ -73,6 +131,10 @@ export class UTL8500Protocol {
     return `:CURR?\n`;
   }
 
+  /**
+   * Set CP power:
+   * Manual p. 12: [SOURce:]POWer <val>
+   */
   public static setPower(power: number): string {
     return `:POW ${power.toFixed(3)}\n`;
   }
@@ -81,6 +143,10 @@ export class UTL8500Protocol {
     return `:POW?\n`;
   }
 
+  /**
+   * Set CV voltage:
+   * Manual p. 11: [SOURce:]VOLTage <val>
+   */
   public static setVoltage(voltage: number): string {
     return `:VOLT ${voltage.toFixed(3)}\n`;
   }
@@ -89,6 +155,10 @@ export class UTL8500Protocol {
     return `:VOLT?\n`;
   }
 
+  /**
+   * Set CR resistance:
+   * Manual p. 12: [SOURce:]RESistance <val>
+   */
   public static setResistance(res: number): string {
     return `:RES ${res.toFixed(3)}\n`;
   }
@@ -98,8 +168,9 @@ export class UTL8500Protocol {
   }
 
   /**
-   * According to UTL8500+ manual Page 7:
-   * [SOURce:]INPut[:STATe] <bool> where <bool> is 0|1 or OFF|ON
+   * Set input ON/OFF:
+   * Manual p. 7: [SOURce:]INPut[:STATe] <bool>
+   * Parameters: 0|1 or OFF|ON
    */
   public static setInput(on: boolean): string {
     return `:INP ${on ? '1' : '0'}\n`;
@@ -110,8 +181,8 @@ export class UTL8500Protocol {
   }
 
   /**
-   * According to UTL8500+ manual Page 7:
-   * [SOURce:]INPut:SHORt[:STATe] <bool>
+   * Set short-circuit ON/OFF:
+   * Manual p. 7: [SOURce:]INPut:SHORt[:STATe] <bool>
    */
   public static setShort(on: boolean): string {
     return `:INP:SHOR ${on ? '1' : '0'}\n`;
@@ -121,18 +192,21 @@ export class UTL8500Protocol {
     return `:INP:SHOR?\n`;
   }
 
+  /**
+   * Clear protection / reset load:
+   * Turning input off clears protection trip on UTL8500
+   */
   public static clearProtection(): string {
-    return `*CLS;:PROT:CLE\n`;
+    return `:INP 0\n`;
   }
 
   /**
-   * According to UTL8500+ manual Page 17:
-   * MEASure:REAL? reads real-time measurement dataset
+   * Measurement queries:
+   * Manual p. 16-17:
+   * :MEAS:VOLT?
+   * :MEAS:CURR?
+   * :MEAS:POW?
    */
-  public static measureReal(): string {
-    return `:MEAS:REAL?\n`;
-  }
-
   public static measureVolt(): string {
     return `:MEAS:VOLT?\n`;
   }

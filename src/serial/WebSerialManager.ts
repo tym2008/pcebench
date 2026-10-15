@@ -58,7 +58,7 @@ export class DeviceDriver {
   private onLostCallback: DeviceLostHandler | null = null;
   private disconnectListener: ((event: any) => void) | null = null;
 
-  // Queue to serialize commands and queries on the physical serial port
+  // Mutex queue to serialize physical serial communication
   private commandQueue: Promise<any> = Promise.resolve();
 
   // Virtual counterpart
@@ -222,6 +222,8 @@ export class DeviceDriver {
         try {
           const formatted = cmd.endsWith('\n') ? cmd : cmd + '\n';
           await this.writer!.write(formatted);
+          // Safety guard time between physical serial transmissions
+          await new Promise(r => setTimeout(r, 15));
           resolve();
         } catch (err: any) {
           this.handleDeviceLost(`向串口发送指令失败 (设备可能已断开): ${err?.message || err}`);
@@ -288,6 +290,8 @@ export class DeviceDriver {
         if (upperLine === cleanCmd || upperLine === cleanCmd.replace(/^:/, '')) {
           continue;
         }
+        // Small guard pause after receiving response to ensure instrument UART is clear
+        await new Promise(r => setTimeout(r, 15));
         return rawLine;
       }
       await new Promise(r => setTimeout(r, 8));
@@ -308,6 +312,9 @@ export class DeviceDriver {
         const m = this.virtualPsu.measure();
         return `${m.vin.toFixed(3)},${m.iin.toFixed(3)},${m.pin.toFixed(3)}`;
       }
+      if (c.includes(':APPL?')) {
+        return `${this.virtualPsu.getTargetVoltage().toFixed(3)},${this.virtualPsu.getCurrentLimit().toFixed(3)}`;
+      }
       if (c.includes(':OUTP?') || c.includes(':OUTPUT?')) {
         return this.virtualPsu.isOutputOn() ? 'ON' : 'OFF';
       }
@@ -321,10 +328,6 @@ export class DeviceDriver {
     } else {
       if (c.includes('*IDN?')) {
         return 'UNI-T,UTL8511,UTL8500A10098,V1.04';
-      }
-      if (c.includes(':MEAS:REAL?') || c.includes(':MEAS:REAL')) {
-        const m = this.virtualLoad.measure();
-        return `${m.vout.toFixed(3)},${m.iout.toFixed(3)},${m.pout.toFixed(3)}`;
       }
       if (c.includes(':MEAS:VOLT?')) {
         return this.virtualLoad.measure().vout.toFixed(3);
@@ -461,6 +464,9 @@ export class WebSerialManager {
     if (!this.load.state.connected) this.load.connectVirtual();
   }
 
+  /**
+   * Set PSU output state, voltage setpoint and current limit
+   */
   public async setPsuOutput(on: boolean, voltage: number, limitCurrent: number) {
     if (this.psu.isVirtual) {
       this.psu.virtualPsu.setOutput(on);
@@ -475,6 +481,9 @@ export class WebSerialManager {
     this.lastPsuStatus.setCurrentLimit = limitCurrent;
   }
 
+  /**
+   * Set Load input state, mode (CURR/VOLT/POW/RES) and target setpoint
+   */
   public async setLoadInput(on: boolean, mode: 'CC' | 'CW' | 'CV' | 'CR', targetVal: number) {
     if (this.load.isVirtual) {
       this.load.virtualLoad.setInput(on);
@@ -507,15 +516,18 @@ export class WebSerialManager {
   }
 
   /**
-   * Measure power supply parameters using DP700 :MEASure:ALL? CH1 query
+   * Measure RIGOL DP700 parameters using standard :MEASure:ALL? CH1 query
    * Returns { vin, iin, pin }
    */
   public async measurePsu(): Promise<{ vin: number; iin: number; pin: number }> {
     if (this.psu.isVirtual) {
       return this.psu.virtualPsu.measure();
     }
+    if (!this.psu.state.connected) {
+      return { vin: 0, iin: 0, pin: 0 };
+    }
     try {
-      const resp = await this.psu.query(DP700Protocol.measureAll('CH1'), 200);
+      const resp = await this.psu.query(DP700Protocol.measureAll(), 300);
       const parts = resp.split(',').map(s => parseFloat(s.trim()));
       if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
         const vin = Math.max(0, parts[0]);
@@ -530,29 +542,19 @@ export class WebSerialManager {
   }
 
   /**
-   * Measure electronic load parameters according to UTL8500+ manual
+   * Measure UNI-T UTL8500 parameters using standard :MEAS:VOLT? and :MEAS:CURR? queries
    * Returns { vout, iout, pout }
    */
   public async measureLoad(supplyVin?: number): Promise<{ vout: number; iout: number; pout: number }> {
     if (this.load.isVirtual) {
       return this.load.virtualLoad.measure(supplyVin);
     }
+    if (!this.load.state.connected) {
+      return { vout: 0, iout: 0, pout: 0 };
+    }
     try {
-      // 1. Try real-time composite query :MEAS:REAL?
-      const realResp = await this.load.query(UTL8500Protocol.measureReal(), 150);
-      if (realResp && realResp.includes(',')) {
-        const parts = realResp.split(',').map(s => parseFloat(s.trim()));
-        if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-          const vout = Math.max(0, parts[0]);
-          const iout = Math.max(0, parts[1]);
-          const pout = parts.length >= 3 && !isNaN(parts[2]) ? Math.max(0, parts[2]) : Math.round(vout * iout * 1000) / 1000;
-          return { vout, iout, pout };
-        }
-      }
-
-      // 2. Individual queries fallback
-      const vStr = await this.load.query(UTL8500Protocol.measureVolt(), 150);
-      const iStr = await this.load.query(UTL8500Protocol.measureCurr(), 150);
+      const vStr = await this.load.query(UTL8500Protocol.measureVolt(), 250);
+      const iStr = await this.load.query(UTL8500Protocol.measureCurr(), 250);
       const vout = Math.max(0, parseFloat(vStr) || 0);
       const iout = Math.max(0, parseFloat(iStr) || 0);
       const pout = Math.round(vout * iout * 1000) / 1000;
@@ -564,7 +566,7 @@ export class WebSerialManager {
   }
 
   /**
-   * Asynchronous comprehensive telemetry sampling
+   * Asynchronous telemetry sampling for both instruments
    */
   public async measureAsync(): Promise<SystemTelemetry> {
     const psuMeas = await this.measurePsu();
@@ -608,6 +610,7 @@ export class WebSerialManager {
 
   /**
    * Query Power Supply State (Output ON/OFF, Voltage setpoint, Current limit)
+   * Uses RIGOL DP700 standard commands: :OUTPut? CH1 and :APPLy? CH1
    */
   public async queryPsuStatus(): Promise<PsuStatus> {
     if (this.psu.isVirtual) {
@@ -623,13 +626,28 @@ export class WebSerialManager {
       return this.lastPsuStatus;
     }
     try {
-      const outpResp = await this.psu.query(DP700Protocol.getOutput('CH1'), 200);
-      const voltResp = await this.psu.query(DP700Protocol.getVoltage('CH1'), 200);
-      const currResp = await this.psu.query(DP700Protocol.getCurrentLimit('CH1'), 200);
-
+      // 1. Query output switch state (:OUTPut? CH1)
+      const outpResp = await this.psu.query(DP700Protocol.getOutput(), 300);
       const outputOn = outpResp.toUpperCase().includes('ON') || outpResp.trim() === '1';
-      const setVoltage = parseFloat(voltResp) || 0;
-      const setCurrentLimit = parseFloat(currResp) || 0;
+
+      // 2. Query setpoint values using :APPLy? CH1 (single command returns "<volt>,<curr>")
+      let setVoltage = this.lastPsuStatus.setVoltage;
+      let setCurrentLimit = this.lastPsuStatus.setCurrentLimit;
+      const applResp = await this.psu.query(DP700Protocol.getApply(), 300);
+      if (applResp && applResp.includes(',')) {
+        const parts = applResp.split(',').map(s => parseFloat(s.trim()));
+        if (!isNaN(parts[0])) setVoltage = parts[0];
+        if (parts.length >= 2 && !isNaN(parts[1])) setCurrentLimit = parts[1];
+      } else {
+        // Fallback: :VOLTage? and :CURRent? WITHOUT channel argument
+        const vStr = await this.psu.query(DP700Protocol.getVoltage(), 300);
+        const iStr = await this.psu.query(DP700Protocol.getCurrentLimit(), 300);
+        const v = parseFloat(vStr);
+        const i = parseFloat(iStr);
+        if (!isNaN(v)) setVoltage = v;
+        if (!isNaN(i)) setCurrentLimit = i;
+      }
+
       const s: PsuStatus = { outputOn, setVoltage, setCurrentLimit };
       this.lastPsuStatus = s;
       return s;
@@ -641,6 +659,7 @@ export class WebSerialManager {
 
   /**
    * Query Electronic Load State (Input ON/OFF, Mode, Target setpoint, Short status)
+   * Uses UNI-T UTL8500 standard commands: :INP?, :MODE?, and parameter queries
    */
   public async queryLoadStatus(): Promise<LoadStatus> {
     if (this.load.isVirtual) {
@@ -663,14 +682,12 @@ export class WebSerialManager {
       return this.lastLoadStatus;
     }
     try {
-      const inpResp = await this.load.query(UTL8500Protocol.getInput(), 200);
-      const modeResp = await this.load.query(UTL8500Protocol.getMode(), 200);
-      const shorResp = await this.load.query(UTL8500Protocol.getShort(), 200);
+      const inpResp = await this.load.query(UTL8500Protocol.getInput(), 250);
+      const modeResp = await this.load.query(UTL8500Protocol.getMode(), 250);
 
       const inputOn = inpResp.includes('1') || inpResp.toUpperCase().includes('ON');
-      const isShort = shorResp.includes('1') || shorResp.toUpperCase().includes('ON');
 
-      let mode: 'CC' | 'CW' | 'CV' | 'CR' = 'CC';
+      let mode: 'CC' | 'CW' | 'CV' | 'CR' = this.lastLoadStatus.mode;
       const upperMode = modeResp.toUpperCase().trim();
       if (upperMode.includes('CURR')) mode = 'CC';
       else if (upperMode.includes('VOLT')) mode = 'CV';
@@ -682,10 +699,11 @@ export class WebSerialManager {
       else if (mode === 'CW') valCmd = UTL8500Protocol.getPower();
       else if (mode === 'CR') valCmd = UTL8500Protocol.getResistance();
 
-      const valResp = await this.load.query(valCmd, 200);
-      const targetVal = parseFloat(valResp) || 0;
+      const valResp = await this.load.query(valCmd, 250);
+      const val = parseFloat(valResp);
+      const targetVal = !isNaN(val) ? val : this.lastLoadStatus.targetVal;
 
-      const s: LoadStatus = { inputOn, mode, targetVal, isShort };
+      const s: LoadStatus = { inputOn, mode, targetVal, isShort: false };
       this.lastLoadStatus = s;
       return s;
     } catch (e) {

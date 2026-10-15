@@ -1074,6 +1074,7 @@ async function handleStopTest() {
 }
 
 let isContinuousSamplingBusy = false;
+let idleTickCount = 0;
 
 function startContinuousSampling() {
   if (sampleTimer) clearInterval(sampleTimer);
@@ -1086,21 +1087,26 @@ function startContinuousSampling() {
     if (!isRunning.value && !isContinuousSamplingBusy) {
       isContinuousSamplingBusy = true;
       try {
-        const meas = await serialManager.measureAsync();
-        metrics.vin = meas.vin;
-        metrics.iin = meas.iin;
-        metrics.pin = meas.pin;
-        metrics.vout = meas.vout;
-        metrics.iout = meas.iout;
-        metrics.pout = meas.pout;
-        metrics.efficiency = meas.efficiency;
+        if (serialManager.psu.state.connected || serialManager.load.state.connected) {
+          const meas = await serialManager.measureAsync();
+          metrics.vin = meas.vin;
+          metrics.iin = meas.iin;
+          metrics.pin = meas.pin;
+          metrics.vout = meas.vout;
+          metrics.iout = meas.iout;
+          metrics.pout = meas.pout;
+          metrics.efficiency = meas.efficiency;
 
-        // Auto-refresh PSU and Load status
-        if (serialManager.psu.state.connected) {
-          await serialManager.queryPsuStatus();
-        }
-        if (serialManager.load.state.connected) {
-          await serialManager.queryLoadStatus();
+          // Gently refresh hardware status periodically (every ~2 seconds in idle)
+          idleTickCount++;
+          if (idleTickCount % 4 === 0) {
+            if (serialManager.psu.state.connected) {
+              await serialManager.queryPsuStatus();
+            }
+            if (serialManager.load.state.connected) {
+              await serialManager.queryLoadStatus();
+            }
+          }
         }
       } catch (e) {
         // Ignore background polling glitches
@@ -1108,7 +1114,7 @@ function startContinuousSampling() {
         isContinuousSamplingBusy = false;
       }
     }
-  }, 250);
+  }, 500);
 }
 
 function stopContinuousSampling() {
@@ -1232,6 +1238,7 @@ async function handleConnectPhysicalPsu(baud: number) {
     await serialManager.psu.connectPhysical(baud);
     isSimulationMode.value = false;
     statusText.value = `电源串口已连接 (${baud}bps)`;
+    await serialManager.queryPsuStatus();
   } catch (e: any) {
     alert('连接电源串口失败: ' + (e?.message || e));
   }
@@ -1247,6 +1254,7 @@ async function handleConnectPhysicalLoad(baud: number) {
     await serialManager.load.connectPhysical(baud);
     isSimulationMode.value = false;
     statusText.value = `负载串口已连接 (${baud}bps)`;
+    await serialManager.queryLoadStatus();
   } catch (e: any) {
     alert('连接负载串口失败: ' + (e?.message || e));
   }

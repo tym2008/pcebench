@@ -555,6 +555,10 @@ async function togglePsuConnection() {
       } else {
         await serialManager.psu.connectPhysical(9600);
         addLog('[PSU] 物理电源串口连接成功', '#3fb950');
+        const psuStat = await serialManager.queryPsuStatus();
+        isPsuOutputOn.value = psuStat.outputOn;
+        if (psuStat.setVoltage > 0) psuSetV.value = psuStat.setVoltage;
+        if (psuStat.setCurrentLimit > 0) psuSetI.value = psuStat.setCurrentLimit;
       }
     } catch (e: any) {
       addLog(`[PSU 错误] 连接失败: ${e?.message || e}`, '#f85149');
@@ -596,7 +600,7 @@ async function toggleLoadShort() {
 async function clearLoadProtection() {
   try {
     await serialManager.clearLoadProtectionState();
-    addLog('[LOAD] 保护状态清除指令已发送 (:PROT:CLE)', '#58a6ff');
+    addLog('[LOAD] 保护状态已复位 (:INP 0)', '#58a6ff');
   } catch (e: any) {
     addLog(`[LOAD 错误] 清除保护失败: ${e?.message || e}`, '#f85149');
   }
@@ -628,6 +632,10 @@ async function toggleLoadConnection() {
       } else {
         await serialManager.load.connectPhysical(9600);
         addLog('[LOAD] 物理电子负载串口连接成功', '#3fb950');
+        const loadStat = await serialManager.queryLoadStatus();
+        isLoadInputOn.value = loadStat.inputOn;
+        loadMode.value = loadStat.mode;
+        if (loadStat.targetVal > 0) loadParamVal.value = loadStat.targetVal;
       }
     } catch (e: any) {
       addLog(`[LOAD 错误] 连接失败: ${e?.message || e}`, '#f85149');
@@ -658,6 +666,7 @@ async function handleEmergencyStop() {
 // Telemetry & Hardware State Polling Loop
 let pollTimer: number | null = null;
 let isPolling = false;
+let singleViewTick = 0;
 
 async function pollTelemetry() {
   if (isPolling) return;
@@ -673,29 +682,32 @@ async function pollTelemetry() {
     loadTelemetry.pout = meas.pout;
     loadTelemetry.r = meas.iout > 0.005 ? meas.vout / meas.iout : 0;
 
-    // Auto-refresh PSU and LOAD hardware states
-    if (serialManager.psu.state.connected) {
-      const psuStat = await serialManager.queryPsuStatus();
-      isPsuOutputOn.value = psuStat.outputOn;
-      const activeEl = document.activeElement;
-      if (activeEl?.getAttribute('data-field') !== 'psuSetV' && psuStat.setVoltage > 0) {
-        psuSetV.value = psuStat.setVoltage;
+    // Gently refresh hardware states (~1.4s interval)
+    singleViewTick++;
+    if (singleViewTick % 4 === 0) {
+      if (serialManager.psu.state.connected) {
+        const psuStat = await serialManager.queryPsuStatus();
+        isPsuOutputOn.value = psuStat.outputOn;
+        const activeEl = document.activeElement;
+        if (activeEl?.getAttribute('data-field') !== 'psuSetV' && psuStat.setVoltage > 0) {
+          psuSetV.value = psuStat.setVoltage;
+        }
+        if (activeEl?.getAttribute('data-field') !== 'psuSetI' && psuStat.setCurrentLimit > 0) {
+          psuSetI.value = psuStat.setCurrentLimit;
+        }
       }
-      if (activeEl?.getAttribute('data-field') !== 'psuSetI' && psuStat.setCurrentLimit > 0) {
-        psuSetI.value = psuStat.setCurrentLimit;
-      }
-    }
 
-    if (serialManager.load.state.connected) {
-      const loadStat = await serialManager.queryLoadStatus();
-      isLoadInputOn.value = loadStat.inputOn;
-      isLoadShortOn.value = loadStat.isShort;
-      const activeEl = document.activeElement;
-      if (activeEl?.getAttribute('data-field') !== 'loadMode') {
-        loadMode.value = loadStat.mode;
-      }
-      if (activeEl?.getAttribute('data-field') !== 'loadParamVal' && loadStat.targetVal > 0) {
-        loadParamVal.value = loadStat.targetVal;
+      if (serialManager.load.state.connected) {
+        const loadStat = await serialManager.queryLoadStatus();
+        isLoadInputOn.value = loadStat.inputOn;
+        isLoadShortOn.value = loadStat.isShort;
+        const activeEl = document.activeElement;
+        if (activeEl?.getAttribute('data-field') !== 'loadMode') {
+          loadMode.value = loadStat.mode;
+        }
+        if (activeEl?.getAttribute('data-field') !== 'loadParamVal' && loadStat.targetVal > 0) {
+          loadParamVal.value = loadStat.targetVal;
+        }
       }
     }
   } catch (e) {
@@ -707,7 +719,7 @@ async function pollTelemetry() {
 
 onMounted(() => {
   addLog('单仪器测试工作台已启动就绪。可独立调试电源电压/限流/开关与电子负载四模拉载。', '#58a6ff');
-  pollTimer = window.setInterval(pollTelemetry, 200);
+  pollTimer = window.setInterval(pollTelemetry, 350);
 });
 
 onUnmounted(() => {
