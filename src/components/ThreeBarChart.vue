@@ -1,131 +1,116 @@
 <template>
-  <div class="relative w-full h-full flex flex-col select-none overflow-hidden bg-slate-950">
+  <div style="position: relative; width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden; background-color: #070b14; user-select: none;">
     <!-- Top HUD Bar: Displays hovered bar metrics or overall summary -->
     <div
-      class="z-10 px-6 py-3 bg-slate-900/90 backdrop-blur-md border-b border-cyan-500/20 shadow-lg flex flex-wrap items-center justify-between gap-4 transition-all duration-300"
+      style="height: 44px; background-color: #1a1e24; border-bottom: 1px solid #2d3748; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; gap: 12px; z-index: 10;"
     >
-      <div class="flex items-center space-x-3">
-        <div class="p-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400">
-          <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
-            <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
-            <line x1="12" y1="22.08" x2="12" y2="12"></line>
-          </svg>
-        </div>
-        <div>
-          <div class="text-xs font-semibold tracking-wider text-cyan-400 uppercase">3D 矩阵效率空间图谱</div>
-          <div class="text-sm text-slate-300 font-mono">
-            X轴: 输入电压 (Vin) &nbsp;|&nbsp; Y轴: {{ yAxisLabel }} &nbsp;|&nbsp; Z轴(高度): 转换效率 (η)
-          </div>
-        </div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <svg class="icon-md" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#00d2ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+          <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+          <line x1="12" y1="22.08" x2="12" y2="12"></line>
+        </svg>
+        <span style="font-weight: bold; color: #00d2ff; font-size: 12px;">3D 空间特征柱状图</span>
+        <span style="color: #718096; font-size: 11px; font-family: monospace;">| X: Vin | Y: {{ yAxisLabel }} | Z(高度): 效率 η</span>
       </div>
 
       <!-- Real-time Hover Point Data Banner -->
-      <div v-if="hoveredPoint" class="flex items-center flex-wrap gap-3 font-mono text-xs bg-slate-950/80 px-4 py-2 rounded-lg border border-cyan-500/40 animate-fade-in shadow-inner">
-        <span class="inline-flex items-center gap-1.5 text-cyan-400 font-semibold">
-          <span class="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
-          选定测试点 [步#{{ hoveredPoint.stepIndex }}]:
+      <div
+        v-if="hoveredPoint"
+        style="background-color: #121519; border: 1px solid #00d2ff; padding: 3px 10px; border-radius: 4px; display: flex; align-items: center; gap: 10px; font-family: 'Consolas', monospace; font-size: 11px; animation: fadeIn 0.15s ease-out;"
+      >
+        <span style="color: #00d2ff; font-weight: bold;">
+          选定点 #{{ hoveredPoint.stepIndex }}:
         </span>
-        <span class="text-slate-300">Vin: <b class="text-amber-400 font-bold">{{ hoveredPoint.vin.toFixed(3) }} V</b></span>
-        <span class="text-slate-400">|</span>
-        <span class="text-slate-300">Iin: <b class="text-slate-200">{{ hoveredPoint.iin.toFixed(3) }} A</b></span>
-        <span class="text-slate-400">|</span>
-        <span class="text-slate-300">Pin: <b class="text-slate-200">{{ hoveredPoint.pin.toFixed(3) }} W</b></span>
-        <span class="text-slate-400">|</span>
-        <span class="text-slate-300">Vout: <b class="text-sky-400 font-bold">{{ hoveredPoint.vout.toFixed(3) }} V</b></span>
-        <span class="text-slate-400">|</span>
-        <span class="text-slate-300">Iout: <b class="text-slate-200">{{ hoveredPoint.iout.toFixed(3) }} A</b></span>
-        <span class="text-slate-400">|</span>
-        <span class="text-slate-300">Pout: <b class="text-slate-200">{{ hoveredPoint.pout.toFixed(3) }} W</b></span>
-        <span class="text-slate-400">|</span>
-        <span class="text-emerald-400 font-bold text-sm bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-500/30">
+        <span>Vin: <b style="color: #ecc94b;">{{ hoveredPoint.vin.toFixed(3) }}V</b></span>
+        <span>Iin: <b style="color: #e2e8f0;">{{ hoveredPoint.iin.toFixed(3) }}A</b></span>
+        <span>Pin: <b style="color: #e2e8f0;">{{ hoveredPoint.pin.toFixed(3) }}W</b></span>
+        <span>Vout: <b style="color: #63b3ed;">{{ hoveredPoint.vout.toFixed(3) }}V</b></span>
+        <span>Iout: <b style="color: #e2e8f0;">{{ hoveredPoint.iout.toFixed(3) }}A</b></span>
+        <span>Pout: <b style="color: #e2e8f0;">{{ hoveredPoint.pout.toFixed(3) }}W</b></span>
+        <span style="background-color: #1c4532; color: #48bb78; font-weight: bold; padding: 1px 6px; border-radius: 3px; border: 1px solid #276749;">
           效率 η: {{ hoveredPoint.efficiency.toFixed(2) }}%
         </span>
       </div>
 
       <!-- Default Prompt when no point is hovered -->
-      <div v-else class="text-xs text-slate-400 flex items-center gap-2 bg-slate-950/60 px-4 py-2 rounded-lg border border-slate-800">
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-cyan-400 animate-bounce" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"></circle>
-          <line x1="12" y1="16" x2="12" y2="12"></line>
-          <line x1="12" y1="8" x2="12.01" y2="8"></line>
-        </svg>
-        <span>💡 移动鼠标悬停在任意 3D 柱体上可将其浮起并查看精确测量参数；按住左键拖拽旋转视角，滚轮缩放，右键平移。</span>
+      <div v-else style="font-size: 11px; color: #718096; display: flex; align-items: center; gap: 6px;">
+        <span style="color: #ecc94b;">💡</span>
+        <span>移动鼠标悬停在 3D 柱体上可浮起并查看具体参数；左键拖拽旋转视角，滚轮缩放，右键平移。</span>
       </div>
 
-      <!-- Y-Axis Mode Switcher & Camera Reset -->
-      <div class="flex items-center space-x-2">
-        <div class="flex rounded-lg bg-slate-800/80 p-0.5 border border-slate-700 text-xs font-medium">
+      <!-- Y-Axis Mode Switcher & Camera Reset (Matching Diagram Graph A and Graph B) -->
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <div style="display: flex; background-color: #121519; padding: 2px; border-radius: 4px; border: 1px solid #2d3748; font-size: 10.5px;">
           <button
+            class="btn"
+            :style="{
+              backgroundColor: yMode === 'current' ? '#2b6cb0' : 'transparent',
+              color: yMode === 'current' ? '#ffffff' : '#a0aec0',
+              fontWeight: yMode === 'current' ? 'bold' : 'normal',
+              border: 'none',
+              padding: '2px 6px'
+            }"
             @click="setYMode('current')"
-            :class="[
-              'px-2.5 py-1 rounded-md transition-all',
-              yMode === 'current'
-                ? 'bg-cyan-500 text-slate-950 font-bold shadow'
-                : 'text-slate-400 hover:text-slate-200'
-            ]"
           >
             Y: 负载电流 (A)
           </button>
           <button
+            class="btn"
+            :style="{
+              backgroundColor: yMode === 'power' ? '#2b6cb0' : 'transparent',
+              color: yMode === 'power' ? '#ffffff' : '#a0aec0',
+              fontWeight: yMode === 'power' ? 'bold' : 'normal',
+              border: 'none',
+              padding: '2px 6px'
+            }"
             @click="setYMode('power')"
-            :class="[
-              'px-2.5 py-1 rounded-md transition-all',
-              yMode === 'power'
-                ? 'bg-cyan-500 text-slate-950 font-bold shadow'
-                : 'text-slate-400 hover:text-slate-200'
-            ]"
           >
             Y: 输出功率 (W)
           </button>
         </div>
 
         <button
+          class="btn"
+          style="padding: 3px 8px; font-size: 11px;"
           @click="resetCamera"
-          class="px-2.5 py-1 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition-all flex items-center gap-1.5"
-          title="恢复初始视角"
+          title="重置视角"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
-            <path d="M3 3v5h5"></path>
-          </svg>
           重置视角
         </button>
       </div>
     </div>
 
     <!-- 3D WebGL Canvas Container -->
-    <div ref="mountRef" class="relative flex-1 w-full h-full cursor-grab active:cursor-grabbing">
+    <div ref="mountRef" style="flex: 1; width: 100%; height: 100%; position: relative; cursor: grab;">
       <!-- 3D Hover Tooltip overlay positioned dynamically -->
       <div
         v-if="tooltip.visible && hoveredPoint"
         :style="{ left: `${tooltip.x}px`, top: `${tooltip.y}px` }"
-        class="pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full mb-3 px-3 py-2 bg-slate-900/95 border border-cyan-400/60 rounded-lg shadow-2xl text-xs font-mono text-slate-100 backdrop-blur-md whitespace-nowrap transition-transform duration-75"
+        style="pointer-events: none; position: absolute; z-index: 20; transform: translate(-50%, -100%); margin-top: -12px; padding: 8px 10px; background-color: rgba(26, 30, 36, 0.95); border: 1px solid #00d2ff; border-radius: 6px; box-shadow: 0 8px 20px rgba(0,0,0,0.8); font-family: 'Consolas', monospace; font-size: 11px; color: #e2e8f0; white-space: nowrap;"
       >
-        <div class="font-bold text-cyan-300 border-b border-slate-700/80 pb-1 mb-1 flex items-center justify-between gap-4">
-          <span>点 #{{ hoveredPoint.stepIndex }}</span>
-          <span class="text-emerald-400">η = {{ hoveredPoint.efficiency.toFixed(2) }}%</span>
+        <div style="font-weight: bold; color: #00d2ff; border-bottom: 1px solid #2d3748; padding-bottom: 3px; margin-bottom: 4px; display: flex; justify-content: space-between; gap: 14px;">
+          <span>采样点 #{{ hoveredPoint.stepIndex }}</span>
+          <span style="color: #48bb78;">η = {{ hoveredPoint.efficiency.toFixed(2) }}%</span>
         </div>
-        <div class="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
-          <div>Vin: <span class="text-amber-300">{{ hoveredPoint.vin.toFixed(2) }}V</span></div>
-          <div>Vout: <span class="text-sky-300">{{ hoveredPoint.vout.toFixed(2) }}V</span></div>
-          <div>Iin: <span class="text-slate-300">{{ hoveredPoint.iin.toFixed(3) }}A</span></div>
-          <div>Iout: <span class="text-slate-300">{{ hoveredPoint.iout.toFixed(3) }}A</span></div>
-          <div>Pin: <span class="text-slate-300">{{ hoveredPoint.pin.toFixed(2) }}W</span></div>
-          <div>Pout: <span class="text-slate-300">{{ hoveredPoint.pout.toFixed(2) }}W</span></div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; font-size: 10.5px;">
+          <div>Vin: <span style="color: #ecc94b;">{{ hoveredPoint.vin.toFixed(2) }}V</span></div>
+          <div>Vout: <span style="color: #63b3ed;">{{ hoveredPoint.vout.toFixed(2) }}V</span></div>
+          <div>Iin: <span>{{ hoveredPoint.iin.toFixed(3) }}A</span></div>
+          <div>Iout: <span>{{ hoveredPoint.iout.toFixed(3) }}A</span></div>
+          <div>Pin: <span>{{ hoveredPoint.pin.toFixed(2) }}W</span></div>
+          <div>Pout: <span>{{ hoveredPoint.pout.toFixed(2) }}W</span></div>
         </div>
-        <!-- Pointer arrow -->
-        <div class="absolute left-1/2 -bottom-1 -translate-x-1/2 w-2 h-2 bg-slate-900 border-r border-b border-cyan-400/60 rotate-45"></div>
       </div>
 
       <!-- Color Legend floating at bottom-right -->
-      <div class="absolute bottom-6 right-6 z-10 px-4 py-3 bg-slate-900/85 backdrop-blur-md rounded-xl border border-slate-800 shadow-xl flex flex-col gap-1.5 pointer-events-auto">
-        <div class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+      <div style="position: absolute; bottom: 16px; right: 16px; z-index: 10; padding: 8px 12px; background-color: rgba(26, 30, 36, 0.85); border-radius: 6px; border: 1px solid #2d3748; display: flex; flex-direction: column; gap: 4px; pointer-events: auto;">
+        <div style="font-size: 10px; font-weight: bold; color: #a0aec0; display: flex; justify-content: space-between;">
           <span>效率色谱 (η)</span>
-          <span class="font-mono text-cyan-400">0% ~ 100%</span>
+          <span style="font-family: monospace; color: #00d2ff;">0% ~ 100%</span>
         </div>
-        <div class="h-3 w-44 rounded-full bg-gradient-to-r from-rose-600 via-amber-500 via-emerald-500 via-cyan-400 to-indigo-500 shadow-inner"></div>
-        <div class="flex justify-between text-[10px] font-mono text-slate-400">
+        <div style="height: 8px; width: 140px; border-radius: 4px; background: linear-gradient(to right, #f43f5e, #f59e0b, #48bb78, #00d2ff, #8b5cf6);"></div>
+        <div style="display: flex; justify-content: space-between; font-size: 9px; font-family: monospace; color: #718096;">
           <span>&lt;70% 低效</span>
           <span>85%</span>
           <span>&gt;95% 高效</span>
