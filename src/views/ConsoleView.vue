@@ -201,15 +201,19 @@
             </div>
           </div>
 
-          <!-- Current Limit & Dwell Time -->
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+          <!-- Current Limit, Dwell Time & Configurable Sampling Rate (Requested: 采样频率可配置，默认8Hz) -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px;">
             <div>
               <span style="font-size: 10px; color: #a0aec0;">电源限流(A):</span>
               <input type="number" v-model.number="sweepConfig.inputCurrentLimit" :disabled="isRunning" step="0.5" style="width: 100%;" />
             </div>
             <div>
-              <span style="font-size: 10px; color: #a0aec0;">每步驻留稳定(秒):</span>
+              <span style="font-size: 10px; color: #a0aec0;">每步驻留(秒):</span>
               <input type="number" v-model.number="sweepConfig.stepDwellTime" :disabled="isRunning" step="0.2" style="width: 100%;" />
+            </div>
+            <div>
+              <span style="font-size: 10px; color: #63b3ed; font-weight: bold;">采样频率(Hz):</span>
+              <input type="number" v-model.number="sweepConfig.sampleRateHz" :disabled="isRunning" min="1" max="100" step="1" style="width: 100%; font-weight: bold; color: #63b3ed;" title="仪器高频连续采样频率 (默认 8Hz)" />
             </div>
           </div>
         </div>
@@ -550,7 +554,7 @@ const sweepConfig = reactive<SweepConfig>({
   loadStep: 0.5,
   loadMode: 'CC',
   stepDwellTime: 1.0,
-  sampleRateHz: 30,
+  sampleRateHz: 8, // Configurable by user, defaults to 8Hz
 });
 
 // Generated Steps
@@ -736,7 +740,7 @@ async function handleStartTest() {
       const dwellMs = sweepConfig.stepDwellTime * 1000;
       const stepDurationSec = sweepConfig.stepDwellTime;
       const filterMarginSec = 0.10; // Exactly 0.1s margin
-      const sampleIntervalMs = Math.max(15, Math.round(1000 / (sweepConfig.sampleRateHz || 30)));
+      const sampleIntervalMs = Math.max(10, Math.round(1000 / (sweepConfig.sampleRateHz || 8)));
 
       const stepStartWall = performance.now();
       const validVinList: number[] = [];

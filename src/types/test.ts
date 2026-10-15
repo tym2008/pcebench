@@ -15,7 +15,7 @@ export interface SweepConfig {
 
   // Measurement Timing
   stepDwellTime: number;    // Dwell time per point (seconds), e.g. 1.0
-  sampleRateHz: number;     // Sampling rate (Hz), e.g. 30
+  sampleRateHz: number;     // Sampling rate (Hz), default 8
 }
 
 export interface RawSample {

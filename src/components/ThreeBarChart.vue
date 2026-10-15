@@ -296,7 +296,13 @@ function initThree() {
 
 function resetCamera() {
   if (!controls || !camera) return;
-  camera.position.set(24, 22, 28);
+  const numX = (props.voltageSteps && props.voltageSteps.length > 0) ? props.voltageSteps.length : 8;
+  const numY = (props.loadSteps && props.loadSteps.length > 0) ? props.loadSteps.length : 8;
+  const chartWidthX = Math.max(18, Math.min(65, numX * 2.2));
+  const chartDepthZ = Math.max(18, Math.min(65, numY * 2.2));
+  const maxSpan = Math.max(chartWidthX, chartDepthZ);
+
+  camera.position.set(maxSpan * 1.15, maxSpan * 0.95, maxSpan * 1.25);
   controls.target.set(0, 4, 0);
   controls.update();
 }
@@ -321,32 +327,49 @@ function buildScene() {
   const points = props.points;
   if (!points || points.length === 0) return;
 
-  // Extract unique X (Vin) and Y (Load or Power)
-  const vList = [...new Set(points.map((p) => p.voltageTarget))].sort((a, b) => a - b);
-  const yValues = points.map((p) => (yMode.value === 'current' ? p.iout : p.pout));
-  const yList = [...new Set(yValues.map((v) => Math.round(v * 10) / 10))].sort((a, b) => a - b);
+  // 1. Determine unique Voltage (Vin) steps and Load steps
+  const vList = (props.voltageSteps && props.voltageSteps.length > 0)
+    ? [...props.voltageSteps].sort((a, b) => a - b)
+    : [...new Set(points.map((p) => p.voltageTarget))].sort((a, b) => a - b);
+
+  const lList = (props.loadSteps && props.loadSteps.length > 0)
+    ? [...props.loadSteps].sort((a, b) => a - b)
+    : [...new Set(points.map((p) => p.loadTarget))].sort((a, b) => a - b);
 
   const numX = Math.max(1, vList.length);
-  const numY = Math.max(1, yList.length);
+  const numY = Math.max(1, lList.length);
 
-  // Chart dimensions in 3D scene space
-  const chartWidthX = 18;  // X span
-  const chartDepthZ = 18;  // Z span (represented as Y in data)
-  const maxHeightY = 10;   // Height corresponds to efficiency 0% ~ 100%
+  // 2. Dynamic 3D Dimensions: scales dynamically with data volume to prevent cramming/overlap
+  const chartWidthX = Math.max(18, Math.min(65, numX * 2.2));
+  const chartDepthZ = Math.max(18, Math.min(65, numY * 2.2));
+  const maxHeightY = 12; // Height corresponds to efficiency 0% ~ 100%
 
   const spacingX = numX > 1 ? chartWidthX / (numX - 1) : chartWidthX;
   const spacingZ = numY > 1 ? chartDepthZ / (numY - 1) : chartDepthZ;
 
-  const barWidth = Math.min(1.2, (chartWidthX / numX) * 0.65);
-  const barDepth = Math.min(1.2, (chartDepthZ / numY) * 0.65);
+  // Bar dimensions: 70% of spacing so adjacent bars NEVER touch or overlap
+  const barWidth = Math.max(0.12, Math.min(1.5, spacingX * 0.70));
+  const barDepth = Math.max(0.12, Math.min(1.5, spacingZ * 0.70));
 
-  // 1. Grid Floor
-  const gridHelper = new THREE.GridHelper(Math.max(chartWidthX, chartDepthZ) + 4, Math.max(numX, numY) + 2, 0x0284c7, 0x1e293b);
+  // 3. Deduplicate points into unique map keyed by (voltageTarget, loadTarget)
+  // This guarantees that multiple points never share the same coordinate or overlap!
+  const cellMap = new Map<string, MatrixPoint>();
+  points.forEach((pt) => {
+    if (pt.status === 'completed' || pt.timestamp > 0) {
+      const key = `${pt.voltageTarget.toFixed(3)}_${pt.loadTarget.toFixed(3)}`;
+      cellMap.set(key, pt);
+    }
+  });
+
+  // 4. Adaptive Ground Floor & Grid Helper
+  const maxSpan = Math.max(chartWidthX, chartDepthZ);
+  const floorSpan = maxSpan + 14;
+  const gridDivisions = Math.max(12, Math.min(40, Math.max(numX, numY)));
+  const gridHelper = new THREE.GridHelper(floorSpan, gridDivisions, 0x0284c7, 0x1e293b);
   gridHelper.position.set(0, 0, 0);
   axesGroup.add(gridHelper);
 
-  // Subtle floor reflective plane
-  const floorGeo = new THREE.PlaneGeometry(36, 36);
+  const floorGeo = new THREE.PlaneGeometry(floorSpan * 1.4, floorSpan * 1.4);
   const floorMat = new THREE.MeshStandardMaterial({
     color: 0x0b1120,
     roughness: 0.7,
@@ -358,7 +381,7 @@ function buildScene() {
   floorMesh.receiveShadow = true;
   axesGroup.add(floorMesh);
 
-  // 2. Coordinate Axes Lines & Labels
+  // 5. Coordinate Axes Lines & Labels
   const axisMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, linewidth: 2 });
 
   // X Axis Line (Input Voltage Vin)
@@ -369,46 +392,48 @@ function buildScene() {
   axesGroup.add(new THREE.Line(xGeo, axisMat));
 
   const xLabel = createTextSprite('X: 输入电压 Vin (V)', 22, '#38bdf8');
-  xLabel.position.set(0, 0.4, chartDepthZ / 2 + 2.8);
-  xLabel.scale.set(7, 1.8, 1);
+  xLabel.position.set(0, 0.4, chartDepthZ / 2 + 3.2);
+  xLabel.scale.set(7.5, 1.9, 1);
   axesGroup.add(xLabel);
 
-  // X Ticks
+  // X Ticks (with adaptive stride so labels never overlap even with large data volume)
+  const maxLabels = 10;
+  const strideX = Math.max(1, Math.ceil(numX / maxLabels));
   vList.forEach((v, idx) => {
-    const posX = -chartWidthX / 2 + idx * spacingX;
-    const tickSprite = createTextSprite(`${v}V`, 16, '#94a3b8');
-    tickSprite.position.set(posX, 0.2, chartDepthZ / 2 + 1.8);
-    tickSprite.scale.set(3, 0.9, 1);
-    axesGroup.add(tickSprite);
+    if (idx % strideX === 0 || idx === numX - 1) {
+      const posX = -chartWidthX / 2 + (numX > 1 ? (idx / (numX - 1)) * chartWidthX : 0);
+      const tickSprite = createTextSprite(`${v}V`, 16, '#94a3b8');
+      tickSprite.position.set(posX, 0.2, chartDepthZ / 2 + 1.8);
+      tickSprite.scale.set(Math.min(3.2, spacingX * 1.5), 0.9, 1);
+      axesGroup.add(tickSprite);
+    }
   });
 
-  // Z Axis in 3D (Y in Data: Output Current/Power)
+  // Z Axis in 3D (Y in Data Matrix: Output Current/Power)
   const zGeo = new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(-chartWidthX / 2 - 1, 0, -chartDepthZ / 2 - 1),
     new THREE.Vector3(-chartWidthX / 2 - 1, 0, chartDepthZ / 2 + 2),
   ]);
   axesGroup.add(new THREE.Line(zGeo, axisMat));
 
-  const zLabel = createTextSprite(
-    yMode.value === 'current' ? 'Y: 负载电流 Iout (A)' : 'Y: 输出功率 Pout (W)',
-    22,
-    '#f59e0b'
-  );
-  zLabel.position.set(-chartWidthX / 2 - 3.2, 0.4, 0);
-  zLabel.scale.set(8, 2, 1);
+  const isPowerMode = yMode.value === 'power' || props.loadMode === 'CW';
+  const loadUnit = isPowerMode ? 'W' : 'A';
+  const zTitle = isPowerMode ? 'Y: 负载功率 Pout (W)' : 'Y: 负载电流 Iout (A)';
+  const zLabel = createTextSprite(zTitle, 22, '#f59e0b');
+  zLabel.position.set(-chartWidthX / 2 - 3.8, 0.4, 0);
+  zLabel.scale.set(8.5, 2.1, 1);
   axesGroup.add(zLabel);
 
-  // Y Ticks
-  yList.forEach((val, idx) => {
-    const posZ = -chartDepthZ / 2 + idx * spacingZ;
-    const tickSprite = createTextSprite(
-      yMode.value === 'current' ? `${val}A` : `${val}W`,
-      16,
-      '#94a3b8'
-    );
-    tickSprite.position.set(-chartWidthX / 2 - 1.8, 0.2, posZ);
-    tickSprite.scale.set(3, 0.9, 1);
-    axesGroup.add(tickSprite);
+  // Y Ticks (with adaptive stride so labels never overlap with large data volume)
+  const strideZ = Math.max(1, Math.ceil(numY / maxLabels));
+  lList.forEach((val, idx) => {
+    if (idx % strideZ === 0 || idx === numY - 1) {
+      const posZ = -chartDepthZ / 2 + (numY > 1 ? (idx / (numY - 1)) * chartDepthZ : 0);
+      const tickSprite = createTextSprite(`${val}${loadUnit}`, 16, '#94a3b8');
+      tickSprite.position.set(-chartWidthX / 2 - 2.2, 0.2, posZ);
+      tickSprite.scale.set(Math.min(3.2, spacingZ * 1.5), 0.9, 1);
+      axesGroup.add(tickSprite);
+    }
   });
 
   // Vertical Height Axis (Efficiency η: 0 ~ 100%)
@@ -419,8 +444,8 @@ function buildScene() {
   axesGroup.add(new THREE.Line(yAxisGeo, axisMat));
 
   const vertLabel = createTextSprite('Z: 转换效率 η (%)', 22, '#10b981');
-  vertLabel.position.set(-chartWidthX / 2 - 1, maxHeightY + 2.2, chartDepthZ / 2 + 1);
-  vertLabel.scale.set(7, 1.8, 1);
+  vertLabel.position.set(-chartWidthX / 2 - 1, maxHeightY + 2.4, chartDepthZ / 2 + 1);
+  vertLabel.scale.set(7.5, 1.9, 1);
   axesGroup.add(vertLabel);
 
   // Efficiency Height Ticks
@@ -439,66 +464,81 @@ function buildScene() {
     axesGroup.add(new THREE.Line(refLineGeo, axisMat));
   });
 
-  // 3. Create 3D Bars for Each Measurement Point
-  points.forEach((pt) => {
-    const vIdx = vList.indexOf(pt.voltageTarget);
-    const yVal = Math.round((yMode.value === 'current' ? pt.iout : pt.pout) * 10) / 10;
-    let yIdx = yList.indexOf(yVal);
-    if (yIdx === -1) yIdx = 0;
+  // 6. Create 3D Bars for Each Cell in Matrix (STRICTLY UNIQUE COORDINATES - NO OVERLAPPING!)
+  vList.forEach((vVal, vIdx) => {
+    lList.forEach((lVal, lIdx) => {
+      const key = `${vVal.toFixed(3)}_${lVal.toFixed(3)}`;
+      const pt = cellMap.get(key);
+      if (!pt) return;
 
-    const posX = -chartWidthX / 2 + (vIdx >= 0 ? vIdx : 0) * spacingX;
-    const posZ = -chartDepthZ / 2 + yIdx * spacingZ;
+      const posX = -chartWidthX / 2 + (numX > 1 ? (vIdx / (numX - 1)) * chartWidthX : 0);
+      const posZ = -chartDepthZ / 2 + (numY > 1 ? (lIdx / (numY - 1)) * chartDepthZ : 0);
 
-    // Height scaled by efficiency (0% - 100% maps to 0.1 ~ maxHeightY)
-    const eff = Math.max(1, Math.min(100, pt.efficiency));
-    const fullHeight = Math.max(0.2, (eff / 100) * maxHeightY);
+      // Height scaled by efficiency (0% - 100% maps to 0.2 ~ maxHeightY)
+      const eff = Math.max(0.5, Math.min(100, pt.efficiency));
+      const fullHeight = Math.max(0.2, (eff / 100) * maxHeightY);
 
-    // Bar Geometry: Rounded edges look modern
-    const boxGeo = new THREE.BoxGeometry(barWidth, fullHeight, barDepth);
-    // Shift geometry origin so bottom of bar is at y = 0
-    boxGeo.translate(0, fullHeight / 2, 0);
+      // Bar Geometry: Rounded edges look modern
+      const boxGeo = new THREE.BoxGeometry(barWidth, fullHeight, barDepth);
+      // Shift geometry origin so bottom of bar is at y = 0
+      boxGeo.translate(0, fullHeight / 2, 0);
+      boxGeo.computeBoundingBox();
+      boxGeo.computeBoundingSphere();
 
-    const barColor = getEfficiencyColor(eff);
-    const barMat = new THREE.MeshStandardMaterial({
-      color: barColor,
-      roughness: 0.35,
-      metalness: 0.25,
-      emissive: barColor,
-      emissiveIntensity: 0.12,
-    });
+      const barColor = getEfficiencyColor(eff);
+      const barMat = new THREE.MeshStandardMaterial({
+        color: barColor,
+        roughness: 0.35,
+        metalness: 0.25,
+        emissive: barColor,
+        emissiveIntensity: 0.12,
+      });
 
-    const mesh = new THREE.Mesh(boxGeo, barMat);
-    mesh.position.set(posX, 0, posZ);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
+      const mesh = new THREE.Mesh(boxGeo, barMat);
+      mesh.position.set(posX, 0, posZ);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
 
-    // Store custom payload for raycasting and hover animation
-    (mesh as any).__barPoint = pt;
+      // Store custom payload for raycasting and hover animation
+      (mesh as any).__barPoint = pt;
 
-    // Wireframe edge highlight
-    const edgesGeo = new THREE.EdgesGeometry(boxGeo);
-    const edgesMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.25 });
-    const wireframe = new THREE.LineSegments(edgesGeo, edgesMat);
-    mesh.add(wireframe);
+      // Wireframe edge highlight
+      const edgesGeo = new THREE.EdgesGeometry(boxGeo);
+      const edgesMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.25 });
+      const wireframe = new THREE.LineSegments(edgesGeo, edgesMat);
+      mesh.add(wireframe);
 
-    barsGroup.add(mesh);
+      barsGroup.add(mesh);
 
-    // Animation initial state: start with scale Y = 0 (entrance ripple effect)
-    mesh.scale.set(1, 0.01, 1);
+      // Animation initial state: start with scale Y = 0 (entrance ripple effect)
+      mesh.scale.set(1, 0.01, 1);
 
-    barMeshList.push({
-      mesh,
-      point: pt,
-      baseY: 0,
-      targetElevation: 0,
-      currentElevation: 0,
-      targetScaleY: 1.0,
-      currentScaleY: 0.01,
-      fullHeight,
-      material: barMat,
-      origColor: barColor.clone(),
+      barMeshList.push({
+        mesh,
+        point: pt,
+        baseY: 0,
+        targetElevation: 0,
+        currentElevation: 0,
+        targetScaleY: 1.0,
+        currentScaleY: 0.01,
+        fullHeight,
+        material: barMat,
+        origColor: barColor.clone(),
+      });
     });
   });
+
+  // 7. Adapt camera framing to whole scene
+  if (camera && controls) {
+    camera.position.set(maxSpan * 1.15, maxSpan * 0.95, maxSpan * 1.25);
+    camera.far = Math.max(2000, maxSpan * 30);
+    camera.updateProjectionMatrix();
+
+    controls.maxDistance = maxSpan * 8;
+    controls.minDistance = 3;
+    controls.target.set(0, maxHeightY * 0.35, 0);
+    controls.update();
+  }
 }
 
 function onMouseMove(event: MouseEvent) {
