@@ -164,6 +164,7 @@ let mouse: THREE.Vector2;
 // Interactive bar meshes
 interface BarMeshInfo {
   mesh: THREE.Mesh;
+  wireframe: THREE.LineSegments;
   point: MatrixPoint;
   baseY: number;
   targetElevation: number;
@@ -179,6 +180,7 @@ let barMeshList: BarMeshInfo[] = [];
 let hoveredBar: BarMeshInfo | null = null;
 let axesGroup: THREE.Group = new THREE.Group();
 let barsGroup: THREE.Group = new THREE.Group();
+let resizeObserver: ResizeObserver | null = null;
 
 // Efficiency to color gradient calculation
 function getEfficiencyColor(eff: number): THREE.Color {
@@ -227,27 +229,90 @@ function createTextSprite(text: string, fontSize: number = 24, textColor: string
   return sprite;
 }
 
+function fitCameraToScene() {
+  if (!camera || !controls || !mountRef.value) return;
+
+  const width = mountRef.value.clientWidth || 800;
+  const height = mountRef.value.clientHeight || 600;
+  if (width === 0 || height === 0) return;
+
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+
+  // Determine chart dimensions from current steps
+  const vList = (props.voltageSteps && props.voltageSteps.length > 0)
+    ? props.voltageSteps
+    : (props.points ? [...new Set(props.points.map((p) => p.voltageTarget))] : [12]);
+  const lList = (props.loadSteps && props.loadSteps.length > 0)
+    ? props.loadSteps
+    : (props.points ? [...new Set(props.points.map((p) => p.loadTarget))] : [1]);
+
+  const numX = Math.max(1, vList.length);
+  const numY = Math.max(1, lList.length);
+  const chartWidthX = Math.max(18, Math.min(65, numX * 2.2));
+  const chartDepthZ = Math.max(18, Math.min(65, numY * 2.2));
+  const maxHeightY = 12;
+
+  // Total extents including axis lines, tick sprites and margin
+  const totalSpanX = chartWidthX + 8;
+  const totalSpanZ = chartDepthZ + 8;
+  const totalSpanY = maxHeightY + 4;
+
+  const fovRad = (camera.fov * Math.PI) / 180;
+  const aspect = Math.max(0.1, camera.aspect);
+
+  // Projected dimensions in 45° isometric perspective
+  const projectedWidth = (totalSpanX + totalSpanZ) * 0.72;
+  const projectedHeight = totalSpanY * 1.1 + (totalSpanX + totalSpanZ) * 0.35;
+
+  // Fit chart comfortably at ~74% of the viewport (reasonable size upon entry, neither tiny nor clipped)
+  const distForHeight = projectedHeight / (2 * Math.tan(fovRad / 2) * 0.74);
+  const distForWidth = projectedWidth / (2 * Math.tan(fovRad / 2) * aspect * 0.74);
+  const fitDist = Math.max(distForHeight, distForWidth, 22);
+
+  // Natural isometric angles: 32° elevation, 45° azimuth
+  const elevation = 0.56; // radians
+  const azimuth = Math.PI / 4; // 45 degrees
+
+  const targetY = maxHeightY * 0.38;
+  const camX = fitDist * Math.cos(elevation) * Math.sin(azimuth);
+  const camY = targetY + fitDist * Math.sin(elevation);
+  const camZ = fitDist * Math.cos(elevation) * Math.cos(azimuth);
+
+  camera.position.set(camX, camY, camZ);
+  camera.near = 0.5;
+  camera.far = Math.max(3000, fitDist * 25);
+  camera.updateProjectionMatrix();
+
+  controls.target.set(0, targetY, 0);
+  controls.minDistance = Math.max(5, fitDist * 0.15);
+  controls.maxDistance = Math.max(120, fitDist * 6.0);
+  controls.update();
+}
+
+function resetCamera() {
+  fitCameraToScene();
+}
+
 function initThree() {
   if (!mountRef.value) return;
 
-  const width = mountRef.value.clientWidth;
-  const height = mountRef.value.clientHeight;
+  const width = mountRef.value.clientWidth || 800;
+  const height = mountRef.value.clientHeight || 600;
 
-  // Scene
+  // Scene - NO FOG! Fog causes zoom to change brightness
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x070b14);
-  scene.fog = new THREE.FogExp2(0x070b14, 0.015);
+  scene.fog = null;
 
   // Camera
-  camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-  camera.position.set(24, 22, 28);
+  camera = new THREE.PerspectiveCamera(45, width / height, 0.5, 3000);
 
-  // Renderer
+  // Renderer - Antialiasing, constant brightness with NoToneMapping
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
   renderer.setSize(width, height);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.NoToneMapping;
   mountRef.value.appendChild(renderer.domElement);
 
   // Controls
@@ -255,28 +320,26 @@ function initThree() {
   controls.enableDamping = true;
   controls.dampingFactor = 0.06;
   controls.maxPolarAngle = Math.PI / 2 - 0.02; // Don't go below ground
-  controls.minDistance = 6;
-  controls.maxDistance = 80;
-  controls.target.set(0, 4, 0);
 
-  // Lighting
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
+  // Lighting - Fully non-attenuating lights so zoom NEVER changes brightness!
+  // 1. Omnidirectional Ambient Light (uniform everywhere, zero distance decay)
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.88);
   scene.add(ambientLight);
 
-  const dirLight1 = new THREE.DirectionalLight(0xffffff, 1.2);
-  dirLight1.position.set(30, 40, 25);
-  dirLight1.castShadow = true;
-  dirLight1.shadow.mapSize.width = 1024;
-  dirLight1.shadow.mapSize.height = 1024;
+  // 2. Key directional light (parallel rays, zero distance decay)
+  const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.45);
+  dirLight1.position.set(40, 60, 40);
   scene.add(dirLight1);
 
-  const dirLight2 = new THREE.DirectionalLight(0x38bdf8, 0.6);
-  dirLight2.position.set(-25, 20, -25);
+  // 3. Fill directional light (parallel rays from opposite side, zero distance decay)
+  const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.35);
+  dirLight2.position.set(-40, 50, -40);
   scene.add(dirLight2);
 
-  const pointLight = new THREE.PointLight(0x10b981, 0.8, 50);
-  pointLight.position.set(0, 15, 0);
-  scene.add(pointLight);
+  // 4. Back directional light for clean edge separation
+  const dirLight3 = new THREE.DirectionalLight(0xffffff, 0.25);
+  dirLight3.position.set(0, 40, -50);
+  scene.add(dirLight3);
 
   // Raycaster & Mouse
   raycaster = new THREE.Raycaster();
@@ -285,26 +348,20 @@ function initThree() {
   scene.add(axesGroup);
   scene.add(barsGroup);
 
+  // ResizeObserver guarantees responsive layout when switching tabs or resizing
+  resizeObserver = new ResizeObserver(() => {
+    onWindowResize();
+  });
+  resizeObserver.observe(mountRef.value);
+
   // Event Listeners
   window.addEventListener('resize', onWindowResize);
   mountRef.value.addEventListener('mousemove', onMouseMove);
   mountRef.value.addEventListener('mouseleave', onMouseLeave);
 
   buildScene();
+  fitCameraToScene();
   animate();
-}
-
-function resetCamera() {
-  if (!controls || !camera) return;
-  const numX = (props.voltageSteps && props.voltageSteps.length > 0) ? props.voltageSteps.length : 8;
-  const numY = (props.loadSteps && props.loadSteps.length > 0) ? props.loadSteps.length : 8;
-  const chartWidthX = Math.max(18, Math.min(65, numX * 2.2));
-  const chartDepthZ = Math.max(18, Math.min(65, numY * 2.2));
-  const maxSpan = Math.max(chartWidthX, chartDepthZ);
-
-  camera.position.set(maxSpan * 1.15, maxSpan * 0.95, maxSpan * 1.25);
-  controls.target.set(0, 4, 0);
-  controls.update();
 }
 
 function buildScene() {
@@ -489,9 +546,9 @@ function buildScene() {
       const barMat = new THREE.MeshStandardMaterial({
         color: barColor,
         roughness: 0.35,
-        metalness: 0.25,
-        emissive: barColor,
-        emissiveIntensity: 0.12,
+        metalness: 0.15,
+        emissive: 0x000000,
+        emissiveIntensity: 0,
       });
 
       const mesh = new THREE.Mesh(boxGeo, barMat);
@@ -515,6 +572,7 @@ function buildScene() {
 
       barMeshList.push({
         mesh,
+        wireframe,
         point: pt,
         baseY: 0,
         targetElevation: 0,
@@ -528,17 +586,8 @@ function buildScene() {
     });
   });
 
-  // 7. Adapt camera framing to whole scene
-  if (camera && controls) {
-    camera.position.set(maxSpan * 1.15, maxSpan * 0.95, maxSpan * 1.25);
-    camera.far = Math.max(2000, maxSpan * 30);
-    camera.updateProjectionMatrix();
-
-    controls.maxDistance = maxSpan * 8;
-    controls.minDistance = 3;
-    controls.target.set(0, maxHeightY * 0.35, 0);
-    controls.update();
-  }
+  // 7. Adapt camera framing to whole scene at reasonable display size
+  fitCameraToScene();
 }
 
 function onMouseMove(event: MouseEvent) {
@@ -563,8 +612,8 @@ function onMouseLeave() {
 function restoreHoveredBar() {
   if (!hoveredBar) return;
   hoveredBar.targetElevation = 0;
-  hoveredBar.material.emissive.copy(hoveredBar.origColor);
-  hoveredBar.material.emissiveIntensity = 0.12;
+  (hoveredBar.wireframe.material as THREE.LineBasicMaterial).opacity = 0.25;
+  (hoveredBar.wireframe.material as THREE.LineBasicMaterial).color.set(0xffffff);
   hoveredBar = null;
   hoveredPoint.value = null;
   tooltip.value.visible = false;
@@ -590,12 +639,12 @@ function updateHover() {
       hoveredPoint.value = barInfo.point;
       tooltip.value.visible = true;
 
-      // Elevated upward animation: raise by 1.2 units
+      // Elevated upward animation: raise by 1.2 units (mechanical elevation only, zero brightness change)
       barInfo.targetElevation = 1.2;
 
-      // Highlight with glowing emissive white/cyan
-      barInfo.material.emissive.set(0x38bdf8);
-      barInfo.material.emissiveIntensity = 0.65;
+      // Highlight wireframe edge cleanly without changing face brightness
+      (barInfo.wireframe.material as THREE.LineBasicMaterial).opacity = 0.9;
+      (barInfo.wireframe.material as THREE.LineBasicMaterial).color.set(0x00d2ff);
     }
   } else {
     if (hoveredBar) {
@@ -633,6 +682,7 @@ function onWindowResize() {
   if (!mountRef.value || !renderer || !camera) return;
   const width = mountRef.value.clientWidth;
   const height = mountRef.value.clientHeight;
+  if (width === 0 || height === 0) return;
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
   renderer.setSize(width, height);
@@ -653,6 +703,10 @@ onMounted(() => {
 onUnmounted(() => {
   cancelAnimationFrame(animationFrameId);
   window.removeEventListener('resize', onWindowResize);
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+    resizeObserver = null;
+  }
   if (renderer && renderer.domElement) {
     renderer.domElement.remove();
     renderer.dispose();

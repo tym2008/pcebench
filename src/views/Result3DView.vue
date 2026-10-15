@@ -50,7 +50,7 @@
 
       <!-- View Tabs & Actions -->
       <div style="display: flex; align-items: center; gap: 8px;">
-        <!-- View Mode Switch: 3D vs 2D Matrix vs Split -->
+        <!-- View Mode Switch: 3D vs 2D Matrix -->
         <div style="display: flex; background-color: #2d3748; padding: 2px; border-radius: 4px; font-size: 11px;">
           <button
             class="btn"
@@ -59,7 +59,7 @@
               color: activeViewTab === '3d' ? '#ffffff' : '#a0aec0',
               fontWeight: activeViewTab === '3d' ? 'bold' : 'normal',
               border: 'none',
-              padding: '3px 8px'
+              padding: '3px 10px'
             }"
             @click="activeViewTab = '3d'"
           >
@@ -72,24 +72,11 @@
               color: activeViewTab === 'matrix' ? '#ffffff' : '#a0aec0',
               fontWeight: activeViewTab === 'matrix' ? 'bold' : 'normal',
               border: 'none',
-              padding: '3px 8px'
+              padding: '3px 10px'
             }"
             @click="activeViewTab = 'matrix'"
           >
             2D 效率矩阵表
-          </button>
-          <button
-            class="btn"
-            :style="{
-              backgroundColor: activeViewTab === 'split' ? '#3182ce' : 'transparent',
-              color: activeViewTab === 'split' ? '#ffffff' : '#a0aec0',
-              fontWeight: activeViewTab === 'split' ? 'bold' : 'normal',
-              border: 'none',
-              padding: '3px 8px'
-            }"
-            @click="activeViewTab = 'split'"
-          >
-            并排双视图
           </button>
         </div>
 
@@ -132,16 +119,11 @@
     </header>
 
     <!-- 2. Main Visualization Content Area -->
-    <div style="flex: 1; display: flex; overflow: hidden; position: relative;">
+    <div style="flex: 1; width: 100%; height: 100%; overflow: hidden; position: relative;">
       <!-- View 1: 3D Bar Chart -->
       <div
-        v-if="activeViewTab === '3d' || activeViewTab === 'split'"
-        :style="{
-          flex: activeViewTab === 'split' ? '1.2' : '1',
-          height: '100%',
-          position: 'relative',
-          borderRight: activeViewTab === 'split' ? '1px solid #2d3748' : 'none'
-        }"
+        v-show="activeViewTab === '3d'"
+        style="width: 100%; height: 100%; position: relative;"
       >
         <ThreeBarChart
           v-if="currentRecord && currentRecord.points.length > 0"
@@ -157,15 +139,8 @@
 
       <!-- View 2: 2D Matrix Table -->
       <div
-        v-if="activeViewTab === 'matrix' || activeViewTab === 'split'"
-        :style="{
-          flex: activeViewTab === 'split' ? '1' : '1',
-          height: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          backgroundColor: '#171b22',
-          overflow: 'hidden'
-        }"
+        v-show="activeViewTab === 'matrix'"
+        style="width: 100%; height: 100%; display: flex; flex-direction: column; background-color: #171b22; overflow: hidden;"
       >
         <!-- 2D Matrix Header -->
         <div style="height: 34px; background-color: #1a1e24; border-bottom: 1px solid #2d3748; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; font-weight: bold; font-size: 12px;">
@@ -282,7 +257,7 @@ const currentRecord = ref<TestRecord | null>(null);
 const allRecords = ref<TestRecord[]>([]);
 const selectedRecordId = ref<string>('');
 const selectedDetailPoint = ref<MatrixPoint | null>(null);
-const activeViewTab = ref<'3d' | 'matrix' | 'split'>('3d');
+const activeViewTab = ref<'3d' | 'matrix'>('3d');
 
 async function loadData() {
   const targetId = (route.params.id as string) || '';
