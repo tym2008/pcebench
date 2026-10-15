@@ -63,10 +63,22 @@
         <span style="display: flex; align-items: center; gap: 5px;">
           <span style="width: 7px; height: 7px; border-radius: 50%;" :style="{ backgroundColor: serialManager.psu.state.connected ? '#48bb78' : '#e53e3e' }"></span>
           电源: {{ serialManager.psu.state.portName }}
+          <span
+            v-if="serialManager.psu.state.connected"
+            :style="{ color: serialManager.lastPsuStatus.outputOn ? '#68d391' : '#fc8181', fontWeight: 'bold' }"
+          >
+            [{{ serialManager.lastPsuStatus.outputOn ? '输出:ON' : '输出:OFF' }}]
+          </span>
         </span>
         <span style="display: flex; align-items: center; gap: 5px;">
           <span style="width: 7px; height: 7px; border-radius: 50%;" :style="{ backgroundColor: serialManager.load.state.connected ? '#48bb78' : '#e53e3e' }"></span>
           负载: {{ serialManager.load.state.portName }}
+          <span
+            v-if="serialManager.load.state.connected"
+            :style="{ color: serialManager.lastLoadStatus.inputOn ? '#68d391' : '#fc8181', fontWeight: 'bold' }"
+          >
+            [{{ serialManager.lastLoadStatus.inputOn ? '带载:ON' : '带载:OFF' }}]
+          </span>
         </span>
 
         <!-- Single Instrument Test Shortcut Button -->
@@ -118,7 +130,7 @@
           </div>
 
           <!-- PSU Row -->
-          <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 6px;">
+          <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 4px;">
             <span style="width: 36px; color: #63b3ed; font-weight: bold; font-size: 11px;">电源:</span>
             <input
               type="text"
@@ -134,6 +146,12 @@
             >
               {{ serialManager.psu.state.connected ? '断开' : '连接' }}
             </button>
+          </div>
+          <div v-if="serialManager.psu.state.connected" style="margin-bottom: 6px; font-size: 10px; display: flex; justify-content: space-between; align-items: center; background: #121519; padding: 2px 6px; border-radius: 3px; border: 1px solid #2d3748;">
+            <span style="color: #a0aec0;">电源状态:</span>
+            <span :style="{ color: serialManager.lastPsuStatus.outputOn ? '#68d391' : '#fc8181', fontWeight: 'bold' }">
+              ● 输出: {{ serialManager.lastPsuStatus.outputOn ? 'ON (已开启)' : 'OFF (已关闭)' }}
+            </span>
           </div>
 
           <!-- Load Row -->
@@ -153,6 +171,12 @@
             >
               {{ serialManager.load.state.connected ? '断开' : '连接' }}
             </button>
+          </div>
+          <div v-if="serialManager.load.state.connected" style="margin-top: 4px; font-size: 10px; display: flex; justify-content: space-between; align-items: center; background: #121519; padding: 2px 6px; border-radius: 3px; border: 1px solid #2d3748;">
+            <span style="color: #a0aec0;">负载状态:</span>
+            <span :style="{ color: serialManager.lastLoadStatus.inputOn ? '#68d391' : '#fc8181', fontWeight: 'bold' }">
+              ● 带载: {{ serialManager.lastLoadStatus.inputOn ? 'ON (带载中)' : 'OFF (已停止)' }} ({{ serialManager.lastLoadStatus.mode }})
+            </span>
           </div>
         </div>
 
@@ -771,7 +795,7 @@ async function handleStartTest() {
           }
 
           const loopT0 = performance.now();
-          const meas = serialManager.measure();
+          const meas = await serialManager.measureAsync();
 
           // Update dashboard metrics
           metrics.vin = meas.vin;
@@ -862,7 +886,7 @@ async function handleStartTest() {
           ? (stepElapsedSec >= filterMarginSec && stepElapsedSec <= (stepDurationSec - filterMarginSec))
           : true;
 
-        const meas = serialManager.measure();
+        const meas = await serialManager.measureAsync();
 
         // Real-time telemetry dashboard values
         metrics.vin = meas.vin;
@@ -1049,25 +1073,42 @@ async function handleStopTest() {
   statusText.value = '测试已手动终止';
 }
 
+let isContinuousSamplingBusy = false;
+
 function startContinuousSampling() {
   if (sampleTimer) clearInterval(sampleTimer);
-  sampleTimer = window.setInterval(() => {
+  sampleTimer = window.setInterval(async () => {
     // Check hardware connection health periodically
     serialManager.checkHealth();
 
     // When NOT running, only update dashboard metrics if instruments are active;
     // CRITICAL: NEVER update latestSample.value when !isRunning.value, to prevent waveform from fluctuating before test starts!
-    if (!isRunning.value) {
-      const meas = serialManager.measure();
-      metrics.vin = meas.vin;
-      metrics.iin = meas.iin;
-      metrics.pin = meas.pin;
-      metrics.vout = meas.vout;
-      metrics.iout = meas.iout;
-      metrics.pout = meas.pout;
-      metrics.efficiency = meas.efficiency;
+    if (!isRunning.value && !isContinuousSamplingBusy) {
+      isContinuousSamplingBusy = true;
+      try {
+        const meas = await serialManager.measureAsync();
+        metrics.vin = meas.vin;
+        metrics.iin = meas.iin;
+        metrics.pin = meas.pin;
+        metrics.vout = meas.vout;
+        metrics.iout = meas.iout;
+        metrics.pout = meas.pout;
+        metrics.efficiency = meas.efficiency;
+
+        // Auto-refresh PSU and Load status
+        if (serialManager.psu.state.connected) {
+          await serialManager.queryPsuStatus();
+        }
+        if (serialManager.load.state.connected) {
+          await serialManager.queryLoadStatus();
+        }
+      } catch (e) {
+        // Ignore background polling glitches
+      } finally {
+        isContinuousSamplingBusy = false;
+      }
     }
-  }, 200);
+  }, 250);
 }
 
 function stopContinuousSampling() {

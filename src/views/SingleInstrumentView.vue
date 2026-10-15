@@ -87,6 +87,7 @@
                 <input
                   type="number"
                   v-model.number="psuSetV"
+                  data-field="psuSetV"
                   step="0.5"
                   min="0"
                   max="60"
@@ -108,6 +109,7 @@
                 <input
                   type="number"
                   v-model.number="psuSetI"
+                  data-field="psuSetI"
                   step="0.1"
                   min="0.1"
                   max="10"
@@ -236,7 +238,7 @@
                 工作模式选择:
               </div>
               <div style="display: flex; gap: 6px;">
-                <select v-model="loadMode" style="flex: 1; font-weight: bold; color: #63b3ed;" @change="handleLoadModeChange">
+                <select v-model="loadMode" data-field="loadMode" style="flex: 1; font-weight: bold; color: #63b3ed;" @change="handleLoadModeChange">
                   <option value="CC">CC (定电流模式)</option>
                   <option value="CV">CV (定电压模式)</option>
                   <option value="CW">CP/CW (定功率模式)</option>
@@ -258,6 +260,7 @@
                 <input
                   type="number"
                   v-model.number="loadParamVal"
+                  data-field="loadParamVal"
                   :step="loadParamStep"
                   min="0"
                   style="flex: 1; font-weight: bold; color: #ed8936; font-size: 14px;"
@@ -652,24 +655,59 @@ async function handleEmergencyStop() {
   addLog('🛑 紧急停止已触发: 电源输出已关闭，负载已停止带载', '#f85149');
 }
 
-// Telemetry Polling Loop
+// Telemetry & Hardware State Polling Loop
 let pollTimer: number | null = null;
+let isPolling = false;
 
-function pollTelemetry() {
-  const meas = serialManager.measure();
-  psuTelemetry.vin = meas.vin;
-  psuTelemetry.iin = meas.iin;
-  psuTelemetry.pin = meas.pin;
+async function pollTelemetry() {
+  if (isPolling) return;
+  isPolling = true;
+  try {
+    const meas = await serialManager.measureAsync();
+    psuTelemetry.vin = meas.vin;
+    psuTelemetry.iin = meas.iin;
+    psuTelemetry.pin = meas.pin;
 
-  loadTelemetry.vout = meas.vout;
-  loadTelemetry.iout = meas.iout;
-  loadTelemetry.pout = meas.pout;
-  loadTelemetry.r = meas.iout > 0.005 ? meas.vout / meas.iout : 0;
+    loadTelemetry.vout = meas.vout;
+    loadTelemetry.iout = meas.iout;
+    loadTelemetry.pout = meas.pout;
+    loadTelemetry.r = meas.iout > 0.005 ? meas.vout / meas.iout : 0;
+
+    // Auto-refresh PSU and LOAD hardware states
+    if (serialManager.psu.state.connected) {
+      const psuStat = await serialManager.queryPsuStatus();
+      isPsuOutputOn.value = psuStat.outputOn;
+      const activeEl = document.activeElement;
+      if (activeEl?.getAttribute('data-field') !== 'psuSetV' && psuStat.setVoltage > 0) {
+        psuSetV.value = psuStat.setVoltage;
+      }
+      if (activeEl?.getAttribute('data-field') !== 'psuSetI' && psuStat.setCurrentLimit > 0) {
+        psuSetI.value = psuStat.setCurrentLimit;
+      }
+    }
+
+    if (serialManager.load.state.connected) {
+      const loadStat = await serialManager.queryLoadStatus();
+      isLoadInputOn.value = loadStat.inputOn;
+      isLoadShortOn.value = loadStat.isShort;
+      const activeEl = document.activeElement;
+      if (activeEl?.getAttribute('data-field') !== 'loadMode') {
+        loadMode.value = loadStat.mode;
+      }
+      if (activeEl?.getAttribute('data-field') !== 'loadParamVal' && loadStat.targetVal > 0) {
+        loadParamVal.value = loadStat.targetVal;
+      }
+    }
+  } catch (e) {
+    // Suppress polling glitches
+  } finally {
+    isPolling = false;
+  }
 }
 
 onMounted(() => {
   addLog('单仪器测试工作台已启动就绪。可独立调试电源电压/限流/开关与电子负载四模拉载。', '#58a6ff');
-  pollTimer = window.setInterval(pollTelemetry, 150);
+  pollTimer = window.setInterval(pollTelemetry, 200);
 });
 
 onUnmounted(() => {

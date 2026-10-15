@@ -104,6 +104,7 @@ export class VirtualPowerSupply {
 export class VirtualElectronicLoad {
   private connected = true;
   private inputOn = false;
+  private isShort = false;
   private mode: 'CC' | 'CW' | 'CV' | 'CR' = 'CC';
   private targetCurrent = 1.0; // In CC mode (A)
   private currentCurrent = 0.0;
@@ -180,9 +181,27 @@ export class VirtualElectronicLoad {
   public getTargetVoltage(): number { return this.targetVoltage; }
   public getTargetResistance(): number { return this.targetResistance; }
 
+  public setShort(s: boolean) {
+    this.isShort = s;
+  }
+
+  public isShortOn(): boolean {
+    return this.isShort;
+  }
+
   public measure(supplyVin?: number): { vout: number; iout: number; pout: number } {
     if (!this.connected || !this.inputOn) {
       return { vout: 0, iout: 0, pout: 0 };
+    }
+
+    if (this.isShort) {
+      const vout = 0.04 + (Math.random() - 0.5) * 0.01;
+      const iout = 10.0 + (Math.random() - 0.5) * 0.02;
+      return {
+        vout: Math.max(0, Math.round(vout * 1000) / 1000),
+        iout: Math.max(0, Math.round(iout * 1000) / 1000),
+        pout: Math.max(0, Math.round(vout * iout * 1000) / 1000),
+      };
     }
 
     const vin = supplyVin ?? 10.0;
