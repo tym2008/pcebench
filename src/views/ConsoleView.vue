@@ -240,19 +240,17 @@
             </div>
           </div>
 
-          <!-- Current Limit, Dwell Time & Configurable Sampling Rate (Requested: 采样频率可配置，默认8Hz) -->
-          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px;">
+          <!-- Current Limit & Fixed Timing Rule -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
             <div>
               <span style="font-size: 10px; color: #a0aec0;">电源限流(A):</span>
-              <input type="number" v-model.number="sweepConfig.inputCurrentLimit" :disabled="isRunning" step="0.5" style="width: 100%;" />
+              <input type="number" v-model.number="sweepConfig.inputCurrentLimit" :disabled="isRunning" step="0.5" style="width: 100%; font-weight: bold;" />
             </div>
             <div>
-              <span style="font-size: 10px; color: #a0aec0;">每步驻留(秒):</span>
-              <input type="number" v-model.number="sweepConfig.stepDwellTime" :disabled="isRunning" step="0.2" style="width: 100%;" />
-            </div>
-            <div>
-              <span style="font-size: 10px; color: #63b3ed; font-weight: bold;">采样频率(Hz):</span>
-              <input type="number" v-model.number="sweepConfig.sampleRateHz" :disabled="isRunning" min="1" max="100" step="1" style="width: 100%; font-weight: bold; color: #63b3ed;" title="仪器高频连续采样频率 (默认 8Hz)" />
+              <span style="font-size: 10px; color: #a0aec0;">步进采样时序机制:</span>
+              <div style="font-size: 10.5px; color: #68d391; font-weight: bold; padding: 2px 0; font-family: monospace;" title="切换后0.5s禁读，0.5s节点采样，等待0.3s二次采样，随后下一步">
+                0.5s静默+0.3s采样
+              </div>
             </div>
           </div>
         </div>
@@ -598,8 +596,7 @@ const sweepConfig = reactive<SweepConfig>({
   loadMax: 2.5,
   loadStep: 0.5,
   loadMode: 'CC',
-  stepDwellTime: 1.0,
-  sampleRateHz: 8, // Configurable by user, defaults to 8Hz
+  stepDwellTime: 0.8,
 });
 
 // Generated Steps
@@ -762,6 +759,53 @@ async function abortAndSaveCurrent() {
   await finalizeTest();
 }
 
+function recordPointSample(
+  point: MatrixPoint,
+  meas: SystemTelemetry,
+  stepRelSec: number,
+  testStartWall: number
+) {
+  const now = performance.now();
+  const totalElapsedSec = (now - testStartWall) / 1000;
+
+  // Real-time telemetry dashboard values
+  metrics.vin = meas.vin;
+  metrics.iin = meas.iin;
+  metrics.pin = meas.pin;
+  metrics.vout = meas.vout;
+  metrics.iout = meas.iout;
+  metrics.pout = meas.pout;
+  metrics.efficiency = meas.efficiency;
+
+  // Waveform reflects every measurement point in real-time
+  latestSample.value = {
+    t: now,
+    vin: meas.vin,
+    vout: meas.vout,
+    iin: meas.iin,
+    iout: meas.iout,
+  };
+
+  // Record raw sample trace
+  const rawPt: RawSample = {
+    timestamp: Date.now(),
+    relTime: Math.round(totalElapsedSec * 1000) / 1000,
+    stepIndex: point.stepIndex,
+    voltageTarget: point.voltageTarget,
+    loadTarget: point.loadTarget,
+    stepRelTime: stepRelSec,
+    isValidForAvg: true,
+    vin: meas.vin,
+    iin: meas.iin,
+    pin: meas.pin,
+    vout: meas.vout,
+    iout: meas.iout,
+    pout: meas.pout,
+    efficiency: meas.efficiency,
+  };
+  allRawSamples.value.push(rawPt);
+}
+
 async function handleStartTest() {
   if (!serialManager.isBothConnected()) {
     if (isSimulationMode.value) {
@@ -848,136 +892,74 @@ async function handleStartTest() {
 
       if (abortController.signal.aborted) break;
 
-      // 4. Step Sampling & Testing (Dwell duration and sampleRate determined by user)
-      statusText.value = `正在测试步 #${point.stepIndex} (Vin: ${point.voltageTarget.toFixed(2)}V, 负载: ${point.loadTarget.toFixed(2)}${point.loadMode})...`;
+      // 4. 采样执行 (用户严格规则: 电流/电压切换后0.5s都不能读 -> 0.5s瞬态采样1次 -> 等待0.3s -> 二次采样 -> 随后下一步)
+      statusText.value = `正在测试步 #${point.stepIndex} (Vin: ${point.voltageTarget.toFixed(2)}V, 负载: ${point.loadTarget.toFixed(2)}${point.loadMode}): 参数已切换，静默等待 0.5s (禁止读取)...`;
 
-      const dwellMs = sweepConfig.stepDwellTime * 1000;
-      const stepDurationSec = sweepConfig.stepDwellTime;
-      const filterMarginSec = 0.10; // Exactly 0.1s margin
-      const sampleIntervalMs = Math.max(10, Math.round(1000 / (sweepConfig.sampleRateHz || 8)));
+      // 4.1 电流和电压切换后，0.5秒都不能读
+      await new Promise((r) => setTimeout(r, 500));
+      if (abortController.signal.aborted) break;
+      while (isPaused.value && !abortController.signal.aborted) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      if (abortController.signal.aborted) break;
 
-      const stepStartWall = performance.now();
-      const validVinList: number[] = [];
-      const validIinList: number[] = [];
-      const validPinList: number[] = [];
-      const validVoutList: number[] = [];
-      const validIoutList: number[] = [];
-      const validPoutList: number[] = [];
-
-      let stepElapsedMs = 0;
-
-      while (stepElapsedMs < dwellMs) {
-        if (abortController.signal.aborted) break;
-
-        // Handle pause (e.g. paused due to serial disconnect or manual pause)
+      // 4.2 在 0.5 秒那一瞬间读一次 (第 1 次采样)
+      statusText.value = `测试步 #${point.stepIndex}: 0.5s 节点采样 (1/2)...`;
+      let meas1: SystemTelemetry;
+      try {
+        meas1 = await serialManager.measureAsync();
+      } catch (measErr: any) {
+        onDeviceLostDetected(
+          'PSU',
+          '仪器通信',
+          `0.5s 节点采样未响应: ${measErr?.message || measErr}`
+        );
         while (isPaused.value && !abortController.signal.aborted) {
           await new Promise((r) => setTimeout(r, 200));
         }
-
-        const loopT0 = performance.now();
-        stepElapsedMs = loopT0 - stepStartWall;
-        const stepElapsedSec = stepElapsedMs / 1000;
-        const totalElapsedSec = (loopT0 - testStartWall) / 1000;
-
-        // Check connection health
-        const health = serialManager.checkHealth();
-        if (!health.ok) {
-          while (isPaused.value && !abortController.signal.aborted) {
-            await new Promise((r) => setTimeout(r, 200));
-          }
-          if (abortController.signal.aborted) break;
-        }
-
-        // Transient rejection condition: ignore [0 ~ 0.1s] and [dwellTime-0.1s ~ dwellTime]
-        const isValidForAvg = (stepDurationSec > 0.20)
-          ? (stepElapsedSec >= filterMarginSec && stepElapsedSec <= (stepDurationSec - filterMarginSec))
-          : true;
-
-        let meas: SystemTelemetry;
-        try {
-          meas = await serialManager.measureAsync();
-        } catch (measErr: any) {
-          while (isPaused.value && !abortController.signal.aborted) {
-            await new Promise((r) => setTimeout(r, 200));
-          }
-          if (abortController.signal.aborted) break;
-          continue;
-        }
-
-        // Real-time telemetry dashboard values
-        metrics.vin = meas.vin;
-        metrics.iin = meas.iin;
-        metrics.pin = meas.pin;
-        metrics.vout = meas.vout;
-        metrics.iout = meas.iout;
-        metrics.pout = meas.pout;
-        metrics.efficiency = meas.efficiency;
-
-        // Waveform reflects EVERY single continuous sampling point in real-time
-        latestSample.value = {
-          t: loopT0,
-          vin: meas.vin,
-          vout: meas.vout,
-          iin: meas.iin,
-          iout: meas.iout,
-        };
-
-        // Record high-frequency raw sample trace
-        const rawPt: RawSample = {
-          timestamp: Date.now(),
-          relTime: Math.round(totalElapsedSec * 1000) / 1000,
-          stepIndex: point.stepIndex,
-          voltageTarget: point.voltageTarget,
-          loadTarget: point.loadTarget,
-          stepRelTime: Math.round(stepElapsedSec * 1000) / 1000,
-          isValidForAvg,
-          vin: meas.vin,
-          iin: meas.iin,
-          pin: meas.pin,
-          vout: meas.vout,
-          iout: meas.iout,
-          pout: meas.pout,
-          efficiency: meas.efficiency,
-        };
-        allRawSamples.value.push(rawPt);
-
-        // Accumulate ONLY valid samples for steady-state step average calculation
-        if (isValidForAvg) {
-          validVinList.push(meas.vin);
-          validIinList.push(meas.iin);
-          validPinList.push(meas.pin);
-          validVoutList.push(meas.vout);
-          validIoutList.push(meas.iout);
-          validPoutList.push(meas.pout);
-        }
-
-        const loopElapsedMs = performance.now() - loopT0;
-        const sleepMs = Math.max(2, sampleIntervalMs - loopElapsedMs);
-        await new Promise((r) => setTimeout(r, sleepMs));
+        if (abortController.signal.aborted) break;
+        meas1 = await serialManager.measureAsync();
       }
+      recordPointSample(point, meas1, 0.50, testStartWall);
 
-      // 3. Steady State Finalization
-      if (validVinList.length > 0) {
-        const count = validVinList.length;
-        point.vin = Math.round((validVinList.reduce((a, b) => a + b, 0) / count) * 1000) / 1000;
-        point.iin = Math.round((validIinList.reduce((a, b) => a + b, 0) / count) * 1000) / 1000;
-        point.pin = Math.round((validPinList.reduce((a, b) => a + b, 0) / count) * 1000) / 1000;
-        point.vout = Math.round((validVoutList.reduce((a, b) => a + b, 0) / count) * 1000) / 1000;
-        point.iout = Math.round((validIoutList.reduce((a, b) => a + b, 0) / count) * 1000) / 1000;
-        point.pout = Math.round((validPoutList.reduce((a, b) => a + b, 0) / count) * 1000) / 1000;
-        point.efficiency = point.pin > 0.001
-          ? Math.min(100, Math.max(0, Math.round((point.pout / point.pin) * 10000) / 100))
-          : 0;
-      } else {
-        const lastMeas = serialManager.measure();
-        point.vin = lastMeas.vin;
-        point.iin = lastMeas.iin;
-        point.pin = lastMeas.pin;
-        point.vout = lastMeas.vout;
-        point.iout = lastMeas.iout;
-        point.pout = lastMeas.pout;
-        point.efficiency = lastMeas.efficiency;
+      // 4.3 等待 0.3s
+      statusText.value = `测试步 #${point.stepIndex}: 保持稳态，等待 0.3s 二次采样...`;
+      await new Promise((r) => setTimeout(r, 300));
+      if (abortController.signal.aborted) break;
+      while (isPaused.value && !abortController.signal.aborted) {
+        await new Promise((r) => setTimeout(r, 200));
       }
+      if (abortController.signal.aborted) break;
+
+      // 4.4 再读一次 (第 2 次采样)
+      statusText.value = `测试步 #${point.stepIndex}: 0.8s 节点采样 (2/2)...`;
+      let meas2: SystemTelemetry;
+      try {
+        meas2 = await serialManager.measureAsync();
+      } catch (measErr: any) {
+        onDeviceLostDetected(
+          'PSU',
+          '仪器通信',
+          `0.8s 节点二次采样未响应: ${measErr?.message || measErr}`
+        );
+        while (isPaused.value && !abortController.signal.aborted) {
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        if (abortController.signal.aborted) break;
+        meas2 = await serialManager.measureAsync();
+      }
+      recordPointSample(point, meas2, 0.80, testStartWall);
+
+      // 4.5 随后下一步: 计算稳态均值并推进
+      point.vin = Math.round(((meas1.vin + meas2.vin) / 2) * 1000) / 1000;
+      point.iin = Math.round(((meas1.iin + meas2.iin) / 2) * 1000) / 1000;
+      point.pin = Math.round(((meas1.pin + meas2.pin) / 2) * 1000) / 1000;
+      point.vout = Math.round(((meas1.vout + meas2.vout) / 2) * 1000) / 1000;
+      point.iout = Math.round(((meas1.iout + meas2.iout) / 2) * 1000) / 1000;
+      point.pout = Math.round(((meas1.pout + meas2.pout) / 2) * 1000) / 1000;
+      point.efficiency = point.pin > 0.001
+        ? Math.min(100, Math.max(0, Math.round((point.pout / point.pin) * 10000) / 100))
+        : 0;
 
       point.status = 'completed';
       point.timestamp = Date.now();
@@ -1052,7 +1034,7 @@ async function finalizeTest() {
       minEfficiency: Math.round(minEff * 100) / 100,
       avgEfficiency: Math.round(avgEff * 100) / 100,
       optimalPoint: plainOptimal,
-      durationSeconds: Math.round(validPts.length * sweepConfig.stepDwellTime),
+      durationSeconds: Math.round(validPts.length * (sweepConfig.stepDwellTime || 0.8)),
     },
   };
 

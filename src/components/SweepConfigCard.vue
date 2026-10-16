@@ -155,27 +155,10 @@
       <!-- Section 3: Timing & Transient Stabilization -->
       <div class="mb-5 grid grid-cols-2 gap-2.5">
         <div>
-          <label class="block text-[11px] text-slate-400 font-mono mb-1">每点驻留稳定时间 (秒)</label>
-          <input
-            type="number"
-            v-model.number="config.stepDwellTime"
-            :disabled="isRunning"
-            step="0.2"
-            min="0.4"
-            class="w-full font-mono text-xs"
-          />
-        </div>
-        <div>
-          <label class="block text-[11px] text-slate-400 font-mono mb-1">高频稳态采样频率 (Hz)</label>
-          <input
-            type="number"
-            v-model.number="config.sampleRateHz"
-            :disabled="isRunning"
-            step="5"
-            min="10"
-            max="50"
-            class="w-full font-mono text-xs"
-          />
+          <label class="block text-[11px] text-slate-400 font-mono mb-1">采样时序机制</label>
+          <div class="text-xs text-emerald-400 font-mono py-1">
+            0.5s静默 + 0.3s采样
+          </div>
         </div>
       </div>
     </div>
@@ -259,7 +242,7 @@ const totalPoints = computed(() => {
 });
 
 const estimatedDurationText = computed(() => {
-  const sec = Math.round(totalPoints.value * props.config.stepDwellTime);
+  const sec = Math.round(totalPoints.value * (props.config.stepDwellTime || 0.8));
   if (sec < 60) return `${sec}秒`;
   const min = Math.floor(sec / 60);
   const remSec = sec % 60;

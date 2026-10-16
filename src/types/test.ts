@@ -13,9 +13,9 @@ export interface SweepConfig {
   loadStep: number;         // Scan step (A or W), e.g. 0.5A or 5W
   loadMode: LoadScanMode;   // 'CC' or 'CW'
 
-  // Measurement Timing
-  stepDwellTime: number;    // Dwell time per point (seconds), e.g. 1.0
-  sampleRateHz: number;     // Sampling rate (Hz), default 8
+  // Measurement Timing (0.5s settle + 0.3s second sample)
+  stepDwellTime?: number;    // Dwell time per point (seconds), default 0.8
+  sampleRateHz?: number;     // Sampling rate (Hz)
 }
 
 export interface RawSample {
