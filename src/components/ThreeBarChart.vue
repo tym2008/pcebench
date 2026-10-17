@@ -468,8 +468,8 @@ function buildScene() {
 
   // Z Axis in 3D (Y in Data Matrix: Output Current/Power)
   const zGeo = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(-chartWidthX / 2 - 1, 0, -chartDepthZ / 2 - 1),
-    new THREE.Vector3(-chartWidthX / 2 - 1, 0, chartDepthZ / 2 + 2),
+    new THREE.Vector3(-chartWidthX / 2 - 1, 0, chartDepthZ / 2 + 1),
+    new THREE.Vector3(-chartWidthX / 2 - 1, 0, -chartDepthZ / 2 - 2),
   ]);
   axesGroup.add(new THREE.Line(zGeo, axisMat));
 
@@ -481,11 +481,11 @@ function buildScene() {
   zLabel.scale.set(8.5, 2.1, 1);
   axesGroup.add(zLabel);
 
-  // Y Ticks (with adaptive stride so labels never overlap with large data volume)
+  // Y Ticks: Current increases from origin corner (chartDepthZ / 2) to depth (-chartDepthZ / 2)
   const strideZ = Math.max(1, Math.ceil(numY / maxLabels));
   lList.forEach((val, idx) => {
     if (idx % strideZ === 0 || idx === numY - 1) {
-      const posZ = -chartDepthZ / 2 + (numY > 1 ? (idx / (numY - 1)) * chartDepthZ : 0);
+      const posZ = chartDepthZ / 2 - (numY > 1 ? (idx / (numY - 1)) * chartDepthZ : 0);
       const tickSprite = createTextSprite(`${val}${loadUnit}`, 16, '#94a3b8');
       tickSprite.position.set(-chartWidthX / 2 - 2.2, 0.2, posZ);
       tickSprite.scale.set(Math.min(3.2, spacingZ * 1.5), 0.9, 1);
@@ -529,7 +529,7 @@ function buildScene() {
       if (!pt) return;
 
       const posX = -chartWidthX / 2 + (numX > 1 ? (vIdx / (numX - 1)) * chartWidthX : 0);
-      const posZ = -chartDepthZ / 2 + (numY > 1 ? (lIdx / (numY - 1)) * chartDepthZ : 0);
+      const posZ = chartDepthZ / 2 - (numY > 1 ? (lIdx / (numY - 1)) * chartDepthZ : 0);
 
       // Height scaled by efficiency (0% - 100% maps to 0.2 ~ maxHeightY)
       const eff = Math.max(0.5, Math.min(100, pt.efficiency));
